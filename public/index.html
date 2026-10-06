@@ -3,83 +3,139 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#ffffff" />
   <title>PlayOff</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/css/styles.css" />
 </head>
 <body>
-  <main class="center">
+  <main class="app">
 
     <!-- SCREEN: home -->
-    <section id="home">
-      <h1>PlayOff</h1>
+    <section id="home" class="screen">
+      <svg class="mascot" viewBox="0 0 130 120" aria-hidden="true">
+        <path d="M45 28 Q38 8 28 6" stroke="#46A302" stroke-width="5" fill="none" stroke-linecap="round"/><circle cx="27" cy="6" r="5" fill="#FF9600"/>
+        <path d="M85 28 Q92 8 102 6" stroke="#46A302" stroke-width="5" fill="none" stroke-linecap="round"/><circle cx="103" cy="6" r="5" fill="#FF9600"/>
+        <rect x="22" y="94" width="14" height="18" rx="7" fill="#46A302"/><rect x="94" y="94" width="14" height="18" rx="7" fill="#46A302"/>
+        <ellipse cx="65" cy="66" rx="48" ry="44" fill="#58CC02"/>
+        <circle cx="46" cy="58" r="14" fill="#fff"/><circle cx="84" cy="58" r="14" fill="#fff"/>
+        <circle cx="49" cy="60" r="7" fill="#2B2B2B"/><circle cx="87" cy="60" r="7" fill="#2B2B2B"/>
+        <circle cx="51" cy="57" r="2.5" fill="#fff"/><circle cx="89" cy="57" r="2.5" fill="#fff"/>
+        <path d="M52 82 Q65 94 78 82" stroke="#2B2B2B" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <circle cx="34" cy="78" r="6" fill="#FF8FA3" opacity="0.7"/><circle cx="96" cy="78" r="6" fill="#FF8FA3" opacity="0.7"/>
+      </svg>
+      <h1 class="brand">PlayOff</h1>
+      <p class="tagline">Race your friends. Fast maths.</p>
 
-      <input id="nameInput" type="text" placeholder="Your nickname" maxlength="20" autocomplete="off" />
-      <button id="createBtn">Create room</button>
+      <input id="nameInput" class="input" type="text" placeholder="Your nickname" maxlength="20"
+             autocomplete="off" autocapitalize="words" spellcheck="false" />
+      <button id="createBtn" class="btn btn-green">Create room</button>
 
       <p class="divider">or join a friend</p>
 
-      <input id="codeInput" type="text" placeholder="ROOM CODE" maxlength="6" autocomplete="off" />
-      <button id="joinBtn" class="blue">Join</button>
+      <div class="join-row">
+        <input id="codeInput" class="input" type="text" placeholder="CODE" maxlength="6"
+               autocomplete="off" autocapitalize="characters" spellcheck="false" />
+        <button id="joinBtn" class="btn btn-blue">Join</button>
+      </div>
 
-      <p id="error" class="error"></p>
+      <p id="error" class="error" role="alert"></p>
     </section>
 
     <!-- SCREEN: lobby -->
-    <section id="lobby" hidden>
-      <p class="label">ROOM CODE</p>
-      <div id="roomCode" class="room-code"></div>
-      <button id="copyBtn" class="small">Copy code</button>
+    <section id="lobby" class="screen" hidden>
+      <header class="screen-head">
+        <button id="leaveBtn" class="icon-btn" aria-label="Leave room">&larr;</button>
+        <h2>Waiting room</h2>
+        <span class="icon-btn" aria-hidden="true"></span>
+      </header>
 
-      <p class="label">PLAYERS</p>
-      <ul id="playerList" class="players"></ul>
+      <div class="code-card">
+        <p class="label tight">ROOM CODE</p>
+        <div id="roomCode" class="room-code"></div>
+        <div class="code-actions">
+          <button id="copyBtn" class="link-btn">Copy code</button>
+          <button id="copyLinkBtn" class="link-btn">Copy link</button>
+        </div>
+      </div>
+
+      <p class="label">PLAYERS <span id="playerCount"></span></p>
+      <ul id="playerList" class="player-list"></ul>
 
       <p class="label">DIFFICULTY</p>
-      <select id="difficultySelect">
-        <option value="easy">Easy</option>
-        <option value="medium">Medium</option>
-        <option value="hard">Hard</option>
-      </select>
+      <div id="difficultyTiles" class="tiles">
+        <button class="tile" data-value="easy">Easy</button>
+        <button class="tile" data-value="medium">Medium</button>
+        <button class="tile" data-value="hard">Hard</button>
+      </div>
 
       <p class="label">QUESTIONS</p>
-      <select id="countSelect">
-        <option value="5">5</option>
-        <option value="10">10</option>
-        <option value="15">15</option>
-        <option value="20">20</option>
-      </select>
+      <div id="countTiles" class="tiles">
+        <button class="tile" data-value="5">5</button>
+        <button class="tile" data-value="10">10</button>
+        <button class="tile" data-value="15">15</button>
+        <button class="tile" data-value="20">20</button>
+      </div>
 
-      <button id="startBtn">Start game</button>
-      <p id="lobbyHint" class="hint">Waiting for the host to start…</p>
-      <button id="leaveBtn" class="small grey">Leave room</button>
+      <button id="startBtn" class="btn btn-green">Start game</button>
+      <p id="lobbyHint" class="hint">Waiting for the host to start&hellip;</p>
     </section>
 
     <!-- SCREEN: countdown -->
-    <section id="countdown" hidden>
-      <p class="label">GET READY</p>
-      <div id="countNumber" class="count-number"></div>
+    <section id="countdown" class="screen" hidden>
+      <p class="label center">GET READY</p>
+      <div class="ring"><div id="countNumber" class="count-number"></div></div>
+      <p id="countInfo" class="hint"></p>
     </section>
 
     <!-- SCREEN: game -->
-    <section id="game" hidden>
-      <p id="qProgress" class="label"></p>
-      <div id="questionText" class="question"></div>
+    <section id="game" class="screen" hidden>
+      <div class="topbar">
+        <div class="progress"><div id="progressFill" class="progress-fill"></div></div>
+        <div class="timer-wrap">
+          <span id="timer">0:00.0</span>
+          <span id="penPop" class="pen-pop"></span>
+        </div>
+      </div>
 
-      <input id="answerInput" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Answer" autocomplete="off" />
-      <button id="checkBtn">Check</button>
-      <button id="skipBtn" class="grey">Skip +15s</button>
-      <p id="feedback" class="error"></p>
-      <p id="finishedMsg" class="hint" hidden>You finished! Waiting for the others…</p>
+      <ul id="raceList" class="lanes"></ul>
 
-      <p class="label">RACE</p>
-      <ul id="raceList" class="players"></ul>
+      <div class="play">
+        <div class="question-card">
+          <div id="qProgress" class="q-count"></div>
+          <div id="questionText" class="question"></div>
+        </div>
+
+        <div class="answer-area">
+          <input id="answerInput" class="input answer" type="text" inputmode="numeric" pattern="[0-9]*"
+                 enterkeyhint="done" placeholder="?" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          <p id="feedback" class="feedback" aria-live="polite"></p>
+          <p id="hintLine" class="hint-line" hidden></p>
+          <button id="skipBtn" class="btn btn-ghost">Skip <span id="skipPen" class="pen">+15s</span></button>
+          <p id="finishedMsg" class="finished-msg" hidden>You finished! Waiting for the others&hellip;</p>
+        </div>
+      </div>
     </section>
 
     <!-- SCREEN: results -->
-    <section id="results" hidden>
-      <h2>Results</h2>
-      <ol id="resultList" class="players"></ol>
-      <button id="rematchBtn">Rematch</button>
-      <button id="homeBtn" class="small grey">Leave room</button>
+    <section id="results" class="screen" hidden>
+      <h2 id="resultTitle" class="result-title"></h2>
+      <p id="resultSub" class="result-sub"></p>
+
+      <div id="podium" class="podium"></div>
+      <ol id="resultList" class="player-list"></ol>
+
+      <div id="chartCard" class="card">
+        <p class="label tight">YOUR TIME PER QUESTION</p>
+        <div id="timeBars" class="bars"></div>
+        <p id="chartNote" class="chart-note"></p>
+      </div>
+
+      <button id="rematchBtn" class="btn btn-green">Rematch</button>
+      <p id="rematchHint" class="hint" hidden>Waiting for the host to start a rematch&hellip;</p>
+      <button id="homeBtn" class="btn btn-ghost">Leave room</button>
     </section>
 
   </main>

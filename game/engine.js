@@ -25,9 +25,12 @@ function questionPayload(game, player, reason) {
     text: game.questions[player.index].text,
     // How many digits the answer has, so the browser knows when to check.
     digits: String(game.questions[player.index].answer).length,
+    timeoutMs: QUESTION_TIMEOUT_MS,
+    skipPenaltyMs: SKIP_PENALTY_MS,
     reason: reason || null,
   };
 }
+
 
 // A finished player's final time: real time + penalties - streak bonus.
 function totalMs(game, p) {
