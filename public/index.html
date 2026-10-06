@@ -15,6 +15,7 @@
 
     <!-- SCREEN: home -->
     <section id="home" class="screen">
+      <button class="icon-btn sound-toggle home-sound" aria-label="Toggle sound"></button>
       <svg class="mascot" viewBox="0 0 130 120" aria-hidden="true">
         <path d="M45 28 Q38 8 28 6" stroke="#46A302" stroke-width="5" fill="none" stroke-linecap="round"/><circle cx="27" cy="6" r="5" fill="#FF9600"/>
         <path d="M85 28 Q92 8 102 6" stroke="#46A302" stroke-width="5" fill="none" stroke-linecap="round"/><circle cx="103" cy="6" r="5" fill="#FF9600"/>
@@ -49,7 +50,7 @@
       <header class="screen-head">
         <button id="leaveBtn" class="icon-btn" aria-label="Leave room">&larr;</button>
         <h2>Waiting room</h2>
-        <span class="icon-btn" aria-hidden="true"></span>
+        <button class="icon-btn sound-toggle" aria-label="Toggle sound"></button>
       </header>
 
       <div class="code-card">
@@ -123,6 +124,7 @@
     <section id="results" class="screen" hidden>
       <h2 id="resultTitle" class="result-title"></h2>
       <p id="resultSub" class="result-sub"></p>
+      <p id="bestLine" class="best-line" hidden></p>
 
       <div id="podium" class="podium"></div>
       <ol id="resultList" class="player-list"></ol>
@@ -141,6 +143,7 @@
   </main>
 
   <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/sound.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>

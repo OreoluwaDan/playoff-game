@@ -316,3 +316,26 @@ button { font-family: inherit; cursor: pointer; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- Stage 7: sound button, confetti, personal best ---------- */
+#home { position: relative; }
+.home-sound { position: absolute; top: 0; right: 0; }
+.sound-toggle { color: var(--muted); }
+.sound-toggle:active { color: var(--blue); }
+
+.best-line {
+  margin: 10px auto 0; width: fit-content; max-width: 100%;
+  padding: 6px 14px; text-align: center;
+  font-size: 0.85rem; font-weight: 800;
+  color: var(--blue-d); background: #ddf4ff; border-radius: 12px;
+}
+
+.confetti-layer { position: fixed; inset: 0; overflow: hidden; pointer-events: none; z-index: 50; }
+.confetti {
+  position: absolute; top: -20px;
+  width: 9px; height: 14px; border-radius: 2px;
+  animation: confettiFall linear forwards;
+}
+@keyframes confettiFall {
+  to { transform: translate3d(var(--drift), 110vh, 0) rotate(var(--spin)); }
+}

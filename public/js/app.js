@@ -46,6 +46,7 @@ const finishedMsg = $('finishedMsg');
 
 const resultTitle = $('resultTitle');
 const resultSub = $('resultSub');
+const bestLine = $('bestLine');
 const podium = $('podium');
 const resultList = $('resultList');
 const chartCard = $('chartCard');
@@ -54,6 +55,30 @@ const chartNote = $('chartNote');
 const rematchBtn = $('rematchBtn');
 const rematchHint = $('rematchHint');
 const homeBtn = $('homeBtn');
+// ----- Sound on/off -----
+const soundButtons = document.querySelectorAll('.sound-toggle');
+const ICON_ON = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
+const ICON_OFF = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M16 9l5 6M21 9l-5 6"/></svg>';
+
+function renderSoundButtons() {
+  soundButtons.forEach((button) => {
+    button.innerHTML = Sound.isMuted() ? ICON_OFF : ICON_ON;
+    button.setAttribute('aria-label', Sound.isMuted() ? 'Sound off. Tap to turn on' : 'Sound on. Tap to turn off');
+  });
+}
+
+soundButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    Sound.setMuted(!Sound.isMuted());
+    renderSoundButtons();
+    if (!Sound.isMuted()) Sound.correct(); // a little preview blip
+  });
+});
+renderSoundButtons();
+
+// Browsers only allow sound after a tap or key press, so wake the audio on the first one.
+document.addEventListener('pointerdown', () => Sound.unlock(), { once: true });
+document.addEventListener('keydown', () => Sound.unlock(), { once: true });
 
 // ----- State -----
 let currentRoom = null;     // the room we are in, or null on the home screen
@@ -333,6 +358,8 @@ socket.on('game:countdown', ({ startAt }) => {
 
     if (countNumber.textContent !== text) {
       countNumber.textContent = text;
+    if (text === 'GO!') Sound.go();
+    else if (text !== '…') Sound.tick();
       ring.classList.toggle('go', text === 'GO!');
       // Restart the little "pop" animation on every new number.
       countNumber.classList.remove('pop');
@@ -584,9 +611,33 @@ function renderChart(me) {
     timeBars.append(bar);
   });
 
-  chartNote.textContent =
+    chartNote.textContent =
     `Slowest: Q${slowest + 1} (${(me.times[slowest].ms / 1000).toFixed(1)}s)` +
-    (me.skips ? ` · Skipped: ${me.skips} (orange)` : '');
+    (me.skips ? ` · Skipped: ${me.skips} (orange)` : '') +
+    (me.bonusMs ? ` · Streak bonus: -${(me.bonusMs / 1000).toFixed(1)}s` : '');
+}
+
+// A burst of falling confetti for the winner.
+function confetti() {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const colors = ['#58CC02', '#1CB0F6', '#FF9600', '#FF4B4B', '#CE82FF', '#FFC800'];
+  const layer = document.createElement('div');
+  layer.className = 'confetti-layer';
+
+  for (let i = 0; i < 90; i++) {
+    const piece = document.createElement('span');
+    piece.className = 'confetti';
+    piece.style.left = `${Math.random() * 100}%`;
+    piece.style.background = colors[i % colors.length];
+    piece.style.setProperty('--drift', `${(Math.random() - 0.5) * 160}px`);
+    piece.style.setProperty('--spin', `${Math.random() * 720 - 360}deg`);
+    piece.style.animationDuration = `${2.2 + Math.random() * 1.8}s`;
+    piece.style.animationDelay = `${Math.random() * 0.6}s`;
+    layer.append(piece);
+  }
+
+  document.body.append(layer);
+  setTimeout(() => layer.remove(), 5000);
 }
 
 socket.on('game:results', ({ players, total }) => {
@@ -636,6 +687,32 @@ socket.on('game:results', ({ players, total }) => {
   const isHost = currentRoom && currentRoom.hostId === socket.id;
   rematchBtn.hidden = !isHost;
   rematchHint.hidden = isHost;
+    // Personal best: saved on this device, separately for each difficulty and question count.
+  bestLine.hidden = true;
+  if (me && me.finished && currentRoom) {
+    const key = `playoff-best-${currentRoom.settings.difficulty}-${currentRoom.settings.questionCount}`;
+    let best = null;
+    try { best = Number(localStorage.getItem(key)) || null; } catch {}
+
+    if (best === null) {
+      try { localStorage.setItem(key, String(me.totalMs)); } catch {}
+      bestLine.textContent = 'Saved as your best time on this setting';
+    } else if (me.totalMs < best) {
+      try { localStorage.setItem(key, String(me.totalMs)); } catch {}
+      bestLine.textContent = `New personal best! The old one was ${formatTime(best)}`;
+    } else {
+      bestLine.textContent = `Your best on this setting: ${formatTime(best)}`;
+    }
+    bestLine.hidden = false;
+  }
+
+  // Celebrate once the podium has finished rising.
+  const won = me && me.finished && me.rank === 1;
+  setTimeout(() => {
+    if ($('results').hidden) return; // they already left the results screen
+    if (won) { Sound.win(); confetti(); }
+    else if (me && me.finished) Sound.finish();
+  }, 900);
   showScreen('results');
 });
 

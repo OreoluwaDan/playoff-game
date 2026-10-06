@@ -140,3 +140,32 @@ test('answers sent too quickly are ignored', () => {
     engine.stop(room);
   }
 });
+
+test('streak bonus: 3 or more right first time in a row takes off 0.5s each', () => {
+  const { room, net } = makeRoom(['Ada'], 10);
+  try {
+    startNow(room, net);
+    for (let i = 0; i < 4; i++) answerCorrectly(room, net, 'p1');
+    // The streak reaches 3 on the third answer and 4 on the fourth: two bonuses.
+    assert.equal(room.game.players.get('p1').bonusMs, 1000);
+  } finally {
+    engine.stop(room);
+  }
+});
+
+test('a wrong answer breaks the streak', () => {
+  const { room, net } = makeRoom(['Ada'], 10);
+  try {
+    startNow(room, net);
+    const p = room.game.players.get('p1');
+    answerCorrectly(room, net, 'p1');
+    answerCorrectly(room, net, 'p1');
+    p.lastActionAt = 0;
+    engine.submitAnswer(room, net, 'p1', String(room.game.questions[p.index].answer + 1));
+    answerCorrectly(room, net, 'p1');
+    answerCorrectly(room, net, 'p1');
+    assert.equal(p.bonusMs, 0);
+  } finally {
+    engine.stop(room);
+  }
+});

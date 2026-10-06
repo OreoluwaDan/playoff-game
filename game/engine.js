@@ -253,6 +253,7 @@ function endGame(room, net) {
       totalMs: finished ? totalMs(game, p) : null,
       wrongs: p.wrongs,
       skips: p.skips,
+      bonusMs: p.bonusMs,
       times: p.times,
     };
   });
