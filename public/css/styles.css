@@ -1,0 +1,36 @@
+/* Stage 2 starter styles. We build the real design later. */
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: system-ui, sans-serif;
+  background: #ffffff;
+  color: #4b4b4b;
+}
+
+.center {
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 48px 16px;
+  text-align: center;
+}
+
+h1 { color: #58cc02; font-size: 2.4rem; margin: 0 0 24px; }
+.cursor { color: #ff9600; }
+
+input, button {
+  font-size: 1rem;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 2px solid #e5e5e5;
+  margin: 6px 0;
+}
+
+button {
+  background: #58cc02;
+  color: white;
+  border-color: #46a302;
+  font-weight: 700;
+  cursor: pointer;
+}
