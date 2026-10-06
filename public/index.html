@@ -2,24 +2,43 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <!-- This line makes the page fit phone screens properly. Never remove it. -->
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>PlayOff</title>
+  <title>playoff</title>
   <link rel="stylesheet" href="/css/styles.css" />
 </head>
 <body>
   <main class="center">
-    <h1>PlayOff<span class="cursor">_</span></h1>
-    <p id="status">Connecting…</p>
-    <p id="online"></p>
 
-    <input id="nameInput" type="text" placeholder="Your nickname" maxlength="20" autocomplete="off" />
-    <button id="helloBtn">Say hello</button>
+    <!-- SCREEN 1: home -->
+    <section id="home">
+      <h1>playoff<span class="cursor">_</span></h1>
 
-    <p id="reply"></p>
+      <input id="nameInput" type="text" placeholder="Your nickname" maxlength="20" autocomplete="off" />
+      <button id="createBtn">Create room</button>
+
+      <p class="divider">or join a friend</p>
+
+      <input id="codeInput" type="text" placeholder="ROOM CODE" maxlength="6" autocomplete="off" />
+      <button id="joinBtn" class="blue">Join</button>
+
+      <p id="error" class="error"></p>
+    </section>
+
+    <!-- SCREEN 2: lobby (hidden until you are in a room) -->
+    <section id="lobby" hidden>
+      <p class="label">ROOM CODE</p>
+      <div id="roomCode" class="room-code"></div>
+      <button id="copyBtn" class="small">Copy code</button>
+
+      <p class="label">PLAYERS</p>
+      <ul id="playerList" class="players"></ul>
+
+      <p class="hint">Waiting for players…</p>
+      <button id="leaveBtn" class="small grey">Leave room</button>
+    </section>
+
   </main>
 
-  <!-- This file is served automatically by Socket.IO. It gives us the io() function. -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="/js/app.js"></script>
 </body>
