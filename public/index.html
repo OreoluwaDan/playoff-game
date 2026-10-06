@@ -9,9 +9,9 @@
 <body>
   <main class="center">
 
-    <!-- SCREEN 1: home -->
+    <!-- SCREEN: home -->
     <section id="home">
-        <h1>PlayOff</h1>
+      <h1>PlayOff</h1>
 
       <input id="nameInput" type="text" placeholder="Your nickname" maxlength="20" autocomplete="off" />
       <button id="createBtn">Create room</button>
@@ -24,7 +24,7 @@
       <p id="error" class="error"></p>
     </section>
 
-    <!-- SCREEN 2: lobby (hidden until you are in a room) -->
+    <!-- SCREEN: lobby -->
     <section id="lobby" hidden>
       <p class="label">ROOM CODE</p>
       <div id="roomCode" class="room-code"></div>
@@ -33,8 +33,53 @@
       <p class="label">PLAYERS</p>
       <ul id="playerList" class="players"></ul>
 
-      <p class="hint">Waiting for players…</p>
+      <p class="label">DIFFICULTY</p>
+      <select id="difficultySelect">
+        <option value="easy">Easy</option>
+        <option value="medium">Medium</option>
+        <option value="hard">Hard</option>
+      </select>
+
+      <p class="label">QUESTIONS</p>
+      <select id="countSelect">
+        <option value="5">5</option>
+        <option value="10">10</option>
+        <option value="15">15</option>
+        <option value="20">20</option>
+      </select>
+
+      <button id="startBtn">Start game</button>
+      <p id="lobbyHint" class="hint">Waiting for the host to start…</p>
       <button id="leaveBtn" class="small grey">Leave room</button>
+    </section>
+
+    <!-- SCREEN: countdown -->
+    <section id="countdown" hidden>
+      <p class="label">GET READY</p>
+      <div id="countNumber" class="count-number"></div>
+    </section>
+
+    <!-- SCREEN: game -->
+    <section id="game" hidden>
+      <p id="qProgress" class="label"></p>
+      <div id="questionText" class="question"></div>
+
+      <input id="answerInput" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Answer" autocomplete="off" />
+      <button id="checkBtn">Check</button>
+      <button id="skipBtn" class="grey">Skip +15s</button>
+      <p id="feedback" class="error"></p>
+      <p id="finishedMsg" class="hint" hidden>You finished! Waiting for the others…</p>
+
+      <p class="label">RACE</p>
+      <ul id="raceList" class="players"></ul>
+    </section>
+
+    <!-- SCREEN: results -->
+    <section id="results" hidden>
+      <h2>Results</h2>
+      <ol id="resultList" class="players"></ol>
+      <button id="rematchBtn">Rematch</button>
+      <button id="homeBtn" class="small grey">Leave room</button>
     </section>
 
   </main>

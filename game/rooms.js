@@ -3,6 +3,7 @@
 // Rooms are kept in memory (no database), which is fine for this game.
 
 const { randomInt } = require('crypto');
+const { DIFFICULTIES, QUESTION_COUNTS } = require('./questions');
 
 const MAX_PLAYERS = 8;
 const CODE_LENGTH = 6;
@@ -117,4 +118,18 @@ function publicState(room) {
   };
 }
 
-module.exports = { createRoom, joinRoom, removePlayer, getRoomCode, publicState };
+function getRoom(code) {
+  return rooms.get(code) || null;
+}
+
+// The host changes the difficulty or question count. We check both values.
+function setSettings(room, difficulty, questionCount) {
+  if (!DIFFICULTIES.includes(difficulty)) return false;
+  if (!QUESTION_COUNTS.includes(questionCount)) return false;
+  room.settings = { difficulty, questionCount };
+  return true;
+}
+
+module.exports = {
+  createRoom, joinRoom, removePlayer, getRoomCode, getRoom, setSettings, publicState,
+};

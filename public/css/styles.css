@@ -72,3 +72,30 @@ button.small { width: auto; display: inline-block; padding: 8px 16px; }
 }
 .dot { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .tag { margin-left: auto; font-size: 0.75rem; color: #ff9600; }
+
+/* ---------- Stage 5 additions ---------- */
+select {
+  display: block;
+  width: 100%;
+  font-size: 1rem;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 2px solid #e5e5e5;
+  margin: 8px 0;
+  background: #fff;
+}
+
+h2 { color: #58cc02; }
+.count-number { font-size: 7rem; font-weight: 900; color: #58cc02; margin: 40px 0; }
+.question { font-size: 3rem; font-weight: 900; margin: 24px 0; }
+#answerInput { text-align: center; font-size: 1.6rem; font-weight: 800; }
+
+
+/* Wrong answer shake */
+.shake { animation: shake 0.3s; border-color: #ff4b4b; }
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-8px); }
+  75% { transform: translateX(8px); }
+}
+@media (prefers-reduced-motion: reduce) { .shake { animation: none; } }
