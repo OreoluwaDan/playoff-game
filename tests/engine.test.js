@@ -193,3 +193,15 @@ test('five wrong answers in a row trigger a short cooldown', () => {
     engine.stop(room);
   }
 });
+
+test('results include a game id so the browser never saves one game twice', () => {
+  const { room, net, events } = makeRoom(['Ada']);
+  try {
+    startNow(room, net);
+    solveAll(room, net, 'p1');
+    const results = events.find((e) => e.e === 'game:results');
+    assert.equal(typeof results.payload.gameId, 'number');
+  } finally {
+    engine.stop(room);
+  }
+});

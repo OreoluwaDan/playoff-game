@@ -69,3 +69,11 @@ test('only valid settings are accepted', () => {
   assert.deepEqual(a.room.settings, { difficulty: 'hard', questionCount: 15 });
   rooms.removePlayer(a.room.code, a.player.id);
 });
+
+test('practice rooms cannot be joined by other people', () => {
+  const a = rooms.createRoom('pr1', 'Ada', true);
+  assert.equal(a.room.practice, true);
+  assert.equal(rooms.publicState(a.room).practice, true);
+  assert.ok(rooms.joinRoom(a.room.code, 'pr2', 'Tunde').error);
+  rooms.removePlayer(a.room.code, a.player.id);
+});

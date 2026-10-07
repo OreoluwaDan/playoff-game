@@ -349,3 +349,34 @@ button { font-family: inherit; cursor: pointer; }
   color: #fff; background: var(--orange);
 }
 .answer[readonly] { background: #fff5f5; border-color: var(--red); }
+
+/* ---------- Stage 8B: practice ghost lane and stats screen ---------- */
+.lanes:empty { display: none; }
+.lane.ghost .lane-name { color: var(--muted); }
+
+.stats-name { margin: 4px 0 12px; text-align: center; font-size: 1.2rem; font-weight: 900; }
+.stat-row { display: flex; gap: 10px; margin: 6px 0 4px; }
+.stat {
+  flex: 1; padding: 10px 6px; text-align: center;
+  border: 2px solid var(--border); border-radius: 16px; box-shadow: 0 4px 0 var(--border);
+}
+.stat-num { font-size: 1.5rem; font-weight: 900; }
+.stat-label { font-size: 0.7rem; font-weight: 900; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+
+.best-grid {
+  display: grid; grid-template-columns: 1.3fr repeat(4, 1fr);
+  gap: 6px; align-items: center; text-align: center; font-size: 0.8rem;
+}
+.best-grid .head { font-size: 0.7rem; font-weight: 900; color: var(--muted); }
+.best-grid .rowlabel { text-align: left; font-weight: 900; }
+.best-grid .cell {
+  padding: 8px 2px; border-radius: 10px; background: #f7f7f7;
+  font-weight: 800; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.best-grid .cell.has { background: #ddf4ff; color: var(--blue-d); }
+
+.history-row { flex-wrap: wrap; }
+.history-row .name { flex: 1; }
+.history-row .meta { flex-basis: 100%; margin-left: 0; padding-left: 0; text-align: left; }
+.empty { padding: 12px 0; text-align: center; color: var(--muted); }
+.danger-link { color: var(--red); }

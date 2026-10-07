@@ -5,7 +5,7 @@ const socket = io();
 const $ = (id) => document.getElementById(id);
 
 // ----- Screens: only one is visible at a time -----
-const SCREENS = ['home', 'lobby', 'countdown', 'game', 'results'];
+const SCREENS = ['home', 'lobby', 'countdown', 'game', 'results', 'stats'];
 function showScreen(name) {
   SCREENS.forEach((s) => { $(s).hidden = s !== name; });
 }
@@ -14,16 +14,22 @@ function showScreen(name) {
 const nameInput = $('nameInput');
 const codeInput = $('codeInput');
 const createBtn = $('createBtn');
+const practiceBtn = $('practiceBtn');
 const joinBtn = $('joinBtn');
+const statsBtn = $('statsBtn');
 const errorEl = $('error');
 const banner = $('banner');
 
 const leaveBtn = $('leaveBtn');
+const lobbyTitle = $('lobbyTitle');
+const codeCard = $('codeCard');
 const roomCodeEl = $('roomCode');
 const copyBtn = $('copyBtn');
 const copyLinkBtn = $('copyLinkBtn');
+const playersLabel = $('playersLabel');
 const playerCount = $('playerCount');
 const playerListEl = $('playerList');
+const practiceBest = $('practiceBest');
 const difficultyTiles = $('difficultyTiles');
 const countTiles = $('countTiles');
 const startBtn = $('startBtn');
@@ -36,6 +42,7 @@ const progressFill = $('progressFill');
 const timerEl = $('timer');
 const penPop = $('penPop');
 const raceList = $('raceList');
+const ghostLane = $('ghostLane');
 const qProgress = $('qProgress');
 const questionText = $('questionText');
 const answerInput = $('answerInput');
@@ -56,6 +63,17 @@ const chartNote = $('chartNote');
 const rematchBtn = $('rematchBtn');
 const rematchHint = $('rematchHint');
 const homeBtn = $('homeBtn');
+
+const statsBack = $('statsBack');
+const statsName = $('statsName');
+const statGames = $('statGames');
+const statWins = $('statWins');
+const statRate = $('statRate');
+const bestGrid = $('bestGrid');
+const recentList = $('recentList');
+const resetStatsBtn = $('resetStatsBtn');
+const statsNote = $('statsNote');
+
 // ----- Sound on/off -----
 const soundButtons = document.querySelectorAll('.sound-toggle');
 const ICON_ON = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
@@ -83,22 +101,25 @@ document.addEventListener('keydown', () => Sound.unlock(), { once: true });
 
 // ----- State -----
 let currentRoom = null;     // the room we are in, or null on the home screen
+let myId = null;            // our permanent player id (it survives reconnects)
 let clockOffset = 0;        // (server clock) minus (this device's clock), in ms
 let countdownTimer = null;
 let gameTicker = null;      // updates the timer and hints while playing
+let lockTimer = null;       // counts down the "too many wrong tries" pause
 let busy = false;           // true while we wait for the server to answer our last move
 let finished = false;       // true once we have answered every question
 let expectedDigits = 0;     // how many digits the current answer has
 let goAtLocal = 0;          // the moment GO happens, on THIS device's clock
-let penaltyMs = 0;          // skip penalties so far (display only, the server keeps the real total)
+let penaltyMs = 0;          // skip penalties so far (display only)
 let questionShownAt = 0;
 let currentIndex = 0;
-let tipQuestion = -1;       // which question showed the skip tip (it shows once per game)
+let tipQuestion = -1;       // which question showed the skip tip (once per game)
 let timeoutMs = 45000;
 let skipPenaltyMs = 15000;
 let laneEls = new Map();    // player id -> pieces of that player's race lane
-let myId = null;            // our permanent player id (it survives reconnects)
-let lockTimer = null;       // counts down the "too many wrong tries" pause
+let ghostReady = false;     // has the practice "PB" lane been set up for this game?
+let ghostBestMs = 0;        // the best time the ghost lane follows (0 = no ghost)
+let ghostFill = null;       // the ghost lane's coloured bar
 
 // ============================================================
 // Small helpers
@@ -145,10 +166,20 @@ function makeAvatar(player, big) {
   return el;
 }
 
-// Remember the nickname on this device. Wrapped in try/catch because some
-// browsers (private mode) block storage.
+// ----- Saving things on this device (wrapped in try/catch: some browsers block storage) -----
 function saveName(name) { try { localStorage.setItem('playoff-name', name); } catch {} }
 function loadName() { try { return localStorage.getItem('playoff-name') || ''; } catch { return ''; } }
+
+function readJSON(key, fallback) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key));
+    return value === null || value === undefined ? fallback : value;
+  } catch { return fallback; }
+}
+function writeJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; }
+}
+
 // The session lets us rejoin our room after a dropped connection or a page refresh.
 // sessionStorage belongs to ONE browser tab, so two windows never share a session.
 function saveSession(code, secret) {
@@ -165,8 +196,9 @@ function clearSession() {
 function setBanner(text) {
   banner.textContent = text || '';
   banner.hidden = !text;
-  // No point letting people press Create or Join while there is no connection.
+  // No point letting people press these while there is no connection.
   createBtn.disabled = !socket.connected;
+  practiceBtn.disabled = !socket.connected;
   joinBtn.disabled = !socket.connected;
 }
 
@@ -199,6 +231,140 @@ async function copyText(text, button, doneLabel) {
 }
 
 // ============================================================
+// Stats: best times, totals and game history (all saved on THIS device)
+// ============================================================
+const HISTORY_KEY = 'playoff-history';
+const TOTALS_KEY = 'playoff-totals';
+const MAX_HISTORY = 50;
+const DIFFICULTY_LIST = ['easy', 'medium', 'hard'];
+const COUNT_LIST = [5, 10, 15, 20];
+
+function bestKey(difficulty, count) { return `playoff-best-${difficulty}-${count}`; }
+
+function getBest(difficulty, count) {
+  try { return Number(localStorage.getItem(bestKey(difficulty, count))) || null; } catch { return null; }
+}
+function setBest(difficulty, count, ms) {
+  try { localStorage.setItem(bestKey(difficulty, count), String(ms)); } catch {}
+}
+
+// Saves one finished game. Returns false if this exact game was already saved
+// (which happens when you refresh on the results screen).
+function recordGame(entry) {
+  const stored = readJSON(HISTORY_KEY, []);
+  const history = Array.isArray(stored) ? stored : [];
+  if (history.some((g) => g.id === entry.id)) return false;
+
+  history.unshift(entry);
+  if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
+
+  const saved = readJSON(TOTALS_KEY, null);
+  const totals = {
+    games: (saved && saved.games) || 0,
+    wins: (saved && saved.wins) || 0,
+    versus: (saved && saved.versus) || 0,
+  };
+  totals.games++;
+  if (entry.mode === 'versus') {
+    totals.versus++;
+    if (entry.won) totals.wins++;
+  }
+
+  writeJSON(HISTORY_KEY, history);
+  writeJSON(TOTALS_KEY, totals);
+  return true;
+}
+
+function renderStats() {
+  const saved = readJSON(TOTALS_KEY, null);
+  const totals = {
+    games: (saved && saved.games) || 0,
+    wins: (saved && saved.wins) || 0,
+    versus: (saved && saved.versus) || 0,
+  };
+
+  statsName.textContent = loadName() || 'Player';
+  statGames.textContent = totals.games;
+  statWins.textContent = totals.wins;
+  statRate.textContent = totals.versus ? `${Math.round((totals.wins / totals.versus) * 100)}%` : '–';
+
+  // Best times grid: a row for each difficulty, a column for each question count.
+  bestGrid.innerHTML = '';
+  const addCell = (text, className) => {
+    const cell = document.createElement('div');
+    cell.className = className;
+    cell.textContent = text;
+    bestGrid.append(cell);
+  };
+  addCell('', 'head');
+  COUNT_LIST.forEach((count) => addCell(`${count} Q`, 'head'));
+  DIFFICULTY_LIST.forEach((difficulty) => {
+    addCell(capitalize(difficulty), 'rowlabel');
+    COUNT_LIST.forEach((count) => {
+      const best = getBest(difficulty, count);
+      addCell(best ? formatTime(best) : '–', best ? 'cell has' : 'cell');
+    });
+  });
+
+  // The last 10 games.
+  recentList.innerHTML = '';
+  const stored = readJSON(HISTORY_KEY, []);
+  const history = Array.isArray(stored) ? stored.slice(0, 10) : [];
+  if (history.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'empty';
+    empty.textContent = 'No games yet. Go play one!';
+    recentList.append(empty);
+  }
+  history.forEach((g) => {
+    const li = document.createElement('li');
+    li.className = 'player history-row';
+
+    let label;
+    if (g.mode === 'versus') label = g.finished ? `${ordinal(g.rank)} of ${g.players}` : 'Did not finish';
+    else label = (g.mode === 'practice' ? 'Practice' : 'Solo') + (g.finished ? '' : ' · unfinished');
+
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = label;
+
+    const date = new Date(g.t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent =
+      `${capitalize(g.difficulty)} · ${g.count} questions · ${g.finished && g.totalMs ? formatTime(g.totalMs) : '–'} · ${date}`;
+
+    li.append(name, meta);
+    recentList.append(li);
+  });
+
+  // Tell people honestly if their browser can't save anything.
+  let canSave = true;
+  try {
+    localStorage.setItem('playoff-test', '1');
+    localStorage.removeItem('playoff-test');
+  } catch { canSave = false; }
+  statsNote.textContent = canSave
+    ? 'Saved on this device only. Clearing your browser data erases it.'
+    : "This browser is blocking storage, so stats can't be saved here.";
+}
+
+statsBtn.addEventListener('click', () => { renderStats(); showScreen('stats'); });
+statsBack.addEventListener('click', () => showScreen('home'));
+
+resetStatsBtn.addEventListener('click', () => {
+  if (!window.confirm('Delete all your saved stats and best times on this device?')) return;
+  try {
+    localStorage.removeItem(HISTORY_KEY);
+    localStorage.removeItem(TOTALS_KEY);
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith('playoff-best-'))
+      .forEach((key) => localStorage.removeItem(key));
+  } catch {}
+  renderStats();
+});
+
+// ============================================================
 // Clock sync: work out how far this device's clock is from the server's,
 // so the countdown ends at the same real moment for everyone.
 // ============================================================
@@ -226,16 +392,12 @@ function syncClock(done) {
   setTimeout(finish, 3000); // never wait forever, even if the server is slow to answer
 }
 
-
-// ============================================================
-// Home
-// ============================================================
 // ============================================================
 // Home
 // ============================================================
 // Called when the server says "you are in a room".
 function onEntered(res, name) {
-  saveName(name);
+  if (name && name.trim()) saveName(name);
   myId = res.playerId;
   saveSession(res.room.code, res.secret);
   enterRoom(res.room);
@@ -257,6 +419,15 @@ createBtn.addEventListener('click', () => {
   });
 });
 
+// Practice: a private room just for you. The nickname is optional.
+practiceBtn.addEventListener('click', () => {
+  const typed = nameInput.value.trim();
+  socket.emit('room:create', { name: typed || 'Player', practice: true }, (res) => {
+    if (!res.ok) return showError(res.error);
+    onEntered(res, typed);
+  });
+});
+
 joinBtn.addEventListener('click', join);
 codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
 codeInput.addEventListener('input', () => { codeInput.value = codeInput.value.toUpperCase(); });
@@ -273,6 +444,15 @@ function setTiles(container, value, enabled) {
 
 function renderRoom(room) {
   currentRoom = room;
+  const practice = !!room.practice;
+
+  // A practice room has no code and no other players, so hide those parts.
+  lobbyTitle.textContent = practice ? 'Practice' : 'Waiting room';
+  codeCard.hidden = practice;
+  playersLabel.hidden = practice;
+  playerListEl.hidden = practice;
+  startBtn.textContent = practice ? 'Start practice' : 'Start game';
+
   roomCodeEl.textContent = room.code;
   playerCount.textContent = `· ${room.players.length}`;
   playerListEl.innerHTML = '';
@@ -293,7 +473,6 @@ function renderRoom(room) {
       tag.textContent = 'HOST';
       li.append(tag);
     }
-
     if (!player.connected) {
       const away = document.createElement('span');
       away.className = 'tag muted';
@@ -302,6 +481,17 @@ function renderRoom(room) {
     }
     playerListEl.append(li);
   });
+
+  // In practice, show your best time for the chosen setting.
+  if (practice) {
+    const best = getBest(room.settings.difficulty, room.settings.questionCount);
+    practiceBest.textContent = best
+      ? `Your best on this setting: ${formatTime(best)}`
+      : 'No best time on this setting yet';
+    practiceBest.hidden = false;
+  } else {
+    practiceBest.hidden = true;
+  }
 
   // Only the host can change settings or start the game.
   const isHost = room.hostId === myId;
@@ -327,8 +517,6 @@ function leaveRoom() {
   stopTicker();
   showScreen('home');
 }
-
-
 leaveBtn.addEventListener('click', leaveRoom);
 homeBtn.addEventListener('click', leaveRoom);
 
@@ -367,17 +555,23 @@ socket.on('room:update', (room) => {
 // ============================================================
 function resetGameUI() {
   stopTicker();
+  clearInterval(lockTimer);
   finished = false;
   busy = false;
   penaltyMs = 0;
   tipQuestion = -1;
   laneEls = new Map();
+  ghostReady = false;
+  ghostBestMs = 0;
+  ghostFill = null;
   raceList.innerHTML = '';
+  ghostLane.innerHTML = '';
   progressFill.style.width = '0%';
   timerEl.textContent = '0:00.0';
   feedback.textContent = '';
   hintLine.hidden = true;
   answerInput.hidden = false;
+  answerInput.readOnly = false;
   skipBtn.hidden = false;
   finishedMsg.hidden = true;
 }
@@ -406,8 +600,8 @@ socket.on('game:countdown', ({ startAt }) => {
 
     if (countNumber.textContent !== text) {
       countNumber.textContent = text;
-    if (text === 'GO!') Sound.go();
-    else if (text !== '…') Sound.tick();
+      if (text === 'GO!') Sound.go();
+      else if (text !== '…') Sound.tick();
       ring.classList.toggle('go', text === 'GO!');
       // Restart the little "pop" animation on every new number.
       countNumber.classList.remove('pop');
@@ -434,10 +628,16 @@ function stopTicker() {
   gameTicker = null;
 }
 
-// Runs 10 times a second: updates the timer and the "stuck" hints.
+// Runs 10 times a second: updates the timer, the ghost lane and the "stuck" hints.
 function tickGame() {
   if (finished) return;
-  timerEl.textContent = formatTime(Math.max(0, Date.now() - goAtLocal) + penaltyMs);
+  const runMs = Math.max(0, Date.now() - goAtLocal);
+  timerEl.textContent = formatTime(runMs + penaltyMs);
+
+  // The practice ghost moves at a steady pace across your best time.
+  if (ghostFill && ghostBestMs > 0) {
+    ghostFill.style.width = `${Math.min(100, (runMs / ghostBestMs) * 100)}%`;
+  }
 
   const elapsed = Date.now() - questionShownAt;
   const left = timeoutMs - elapsed;
@@ -464,9 +664,53 @@ function showPenaltyPop(ms) {
   penPop.classList.add('show');
 }
 
+// In practice with a saved best time, add a grey "PB" lane that follows that pace.
+function setupGhost() {
+  ghostReady = true;
+  ghostLane.innerHTML = '';
+  ghostBestMs = 0;
+  ghostFill = null;
+  if (!currentRoom || !currentRoom.practice) return;
+
+  const best = getBest(currentRoom.settings.difficulty, currentRoom.settings.questionCount);
+  if (!best) return;
+  ghostBestMs = best;
+
+  const li = document.createElement('li');
+  li.className = 'lane ghost';
+
+  const badge = document.createElement('span');
+  badge.className = 'avatar';
+  badge.style.background = '#cfcfcf';
+  badge.style.color = '#ffffff';
+  badge.textContent = 'PB';
+
+  const main = document.createElement('div');
+  main.className = 'lane-main';
+  const name = document.createElement('div');
+  name.className = 'lane-name';
+  name.textContent = `Your best (${formatTime(best)})`;
+  const track = document.createElement('div');
+  track.className = 'track';
+  const fill = document.createElement('div');
+  fill.className = 'fill';
+  fill.style.background = '#cfcfcf';
+  track.append(fill);
+  main.append(name, track);
+
+  const spacer = document.createElement('span');
+  spacer.className = 'lane-count';
+
+  li.append(badge, main, spacer);
+  ghostLane.append(li);
+  ghostFill = fill;
+}
+
 function showQuestion(q, message) {
   clearInterval(countdownTimer);
+  clearInterval(lockTimer);
   showScreen('game');
+  if (!ghostReady) setupGhost();
 
   expectedDigits = q.digits;
   timeoutMs = q.timeoutMs;
@@ -475,10 +719,9 @@ function showQuestion(q, message) {
   questionShownAt = Date.now() - (q.elapsedMs || 0); // right even if we just came back
   penaltyMs = q.penaltyMs || 0;                      // the server's penalty total
   goAtLocal = q.startAt - clockOffset;
-  clearInterval(lockTimer);
-  answerInput.readOnly = false;
 
   answerInput.hidden = false;
+  answerInput.readOnly = false;
   skipBtn.hidden = false;
   finishedMsg.hidden = true;
   hintLine.hidden = true;
@@ -497,6 +740,7 @@ function showQuestion(q, message) {
 function showFinished() {
   finished = true;
   stopTicker();
+  clearInterval(lockTimer);
   progressFill.style.width = '100%';
   answerInput.hidden = true;
   skipBtn.hidden = true;
@@ -508,8 +752,8 @@ function showFinished() {
 // The server sends a question when the race starts, and also when it auto-skips us.
 socket.on('game:question', (q) => {
   if (q.reason === 'timeout') {
-    penaltyMs += q.skipPenaltyMs;
     showPenaltyPop(q.skipPenaltyMs);
+    Sound.skip();
     showQuestion(q, 'Out of time. Skipped.');
   } else {
     showQuestion(q);
@@ -582,8 +826,8 @@ function submitSkip() {
   socket.emit('game:skip', {}, (res) => {
     busy = false;
     if (!res.ok) { feedback.textContent = res.error; return; }
-    penaltyMs += res.penaltyMs;
     showPenaltyPop(res.penaltyMs);
+    Sound.skip();
     if (res.finished) showFinished();
     else showQuestion(res.question);
   });
@@ -687,7 +931,7 @@ function renderChart(me) {
     timeBars.append(bar);
   });
 
-    chartNote.textContent =
+  chartNote.textContent =
     `Slowest: Q${slowest + 1} (${(me.times[slowest].ms / 1000).toFixed(1)}s)` +
     (me.skips ? ` · Skipped: ${me.skips} (orange)` : '') +
     (me.bonusMs ? ` · Streak bonus: -${(me.bonusMs / 1000).toFixed(1)}s` : '');
@@ -716,14 +960,61 @@ function confetti() {
   setTimeout(() => layer.remove(), 5000);
 }
 
-socket.on('game:results', ({ players, total }) => {
+socket.on('game:results', ({ players, total, gameId }) => {
   clearInterval(countdownTimer);
   stopTicker();
 
   const me = players.find((p) => p.id === myId);
+  const room = currentRoom;
+  const practice = !!(room && room.practice);
+  const versus = !practice && players.length >= 2;
 
+  // 1) Save this game to the history (skipped if it was already saved).
+  let fresh = false;
+  if (me && room) {
+    fresh = recordGame({
+      id: `${room.code}-${gameId || Date.now()}-${myId}`,
+      t: Date.now(),
+      mode: practice ? 'practice' : versus ? 'versus' : 'solo',
+      difficulty: room.settings.difficulty,
+      count: total,
+      players: players.length,
+      rank: me.rank,
+      finished: me.finished,
+      totalMs: me.totalMs,
+      wrongs: me.wrongs,
+      skips: me.skips,
+      won: versus && me.finished && me.rank === 1,
+    });
+  }
+
+  // 2) Compare with your personal best on this setting.
+  let newBest = false;
+  bestLine.hidden = true;
+  if (me && me.finished && room) {
+    const { difficulty } = room.settings;
+    const previous = getBest(difficulty, total);
+
+    if (previous === null) {
+      setBest(difficulty, total, me.totalMs);
+      newBest = true;
+      bestLine.textContent = 'Saved as your best time on this setting';
+    } else if (me.totalMs < previous) {
+      setBest(difficulty, total, me.totalMs);
+      newBest = true;
+      bestLine.textContent = `New personal best! ${formatTime(previous - me.totalMs)} faster than before`;
+    } else if (me.totalMs === previous) {
+      bestLine.textContent = 'This is your best time on this setting';
+    } else {
+      bestLine.textContent = `${formatTime(me.totalMs - previous)} slower than your best (${formatTime(previous)})`;
+    }
+    bestLine.hidden = false;
+  }
+
+  // 3) Title and subtitle.
   if (me) {
     if (!me.finished) resultTitle.textContent = 'Time is up';
+    else if (practice) resultTitle.textContent = newBest ? 'New best!' : 'Done!';
     else if (players.length === 1) resultTitle.textContent = 'Finished!';
     else if (me.rank === 1) resultTitle.textContent = 'You won!';
     else resultTitle.textContent = `${ordinal(me.rank)} place`;
@@ -733,7 +1024,10 @@ socket.on('game:results', ({ players, total }) => {
       : `${me.completed} of ${total} answered`;
   }
 
-  renderPodium(players);
+  // 4) Podium and ranking (not needed when you are alone in practice).
+  podium.hidden = practice;
+  resultList.hidden = practice;
+  if (!practice) renderPodium(players);
 
   resultList.innerHTML = '';
   players.forEach((p) => {
@@ -760,69 +1054,20 @@ socket.on('game:results', ({ players, total }) => {
 
   renderChart(me);
 
-  const isHost = currentRoom && currentRoom.hostId === myId;
+  const isHost = room && room.hostId === myId;
+  rematchBtn.textContent = practice ? 'Play again' : 'Rematch';
   rematchBtn.hidden = !isHost;
   rematchHint.hidden = isHost;
-    // Personal best: saved on this device, separately for each difficulty and question count.
-  bestLine.hidden = true;
-  if (me && me.finished && currentRoom) {
-    const key = `playoff-best-${currentRoom.settings.difficulty}-${currentRoom.settings.questionCount}`;
-    let best = null;
-    try { best = Number(localStorage.getItem(key)) || null; } catch {}
+  showScreen('results');
 
-    if (best === null) {
-      try { localStorage.setItem(key, String(me.totalMs)); } catch {}
-      bestLine.textContent = 'Saved as your best time on this setting';
-    } else if (me.totalMs < best) {
-      try { localStorage.setItem(key, String(me.totalMs)); } catch {}
-      bestLine.textContent = `New personal best! The old one was ${formatTime(best)}`;
-    } else {
-      bestLine.textContent = `Your best on this setting: ${formatTime(best)}`;
-    }
-    bestLine.hidden = false;
-  }
-
-  // Celebrate once the podium has finished rising.
-  const won = me && me.finished && me.rank === 1;
+  // 5) Celebrate (only the first time we see these results, not after a refresh).
+  const celebrate = fresh && me && me.finished && ((practice && newBest) || (versus && me.rank === 1));
   setTimeout(() => {
     if ($('results').hidden) return; // they already left the results screen
-    if (won) { Sound.win(); confetti(); }
-    else if (me && me.finished) Sound.finish();
-  }, 900);
-  showScreen('results');
+    if (celebrate) { Sound.win(); confetti(); }
+    else if (fresh && me && me.finished) Sound.finish();
+  }, practice ? 300 : 900);
 });
-
-// If the connection drops, the server removes us from the room, so go home.
-// ============================================================
-// Connection: dropped connections, reconnecting, rejoining
-// ============================================================
-function tryRejoin() {
-  const session = loadSession();
-  if (!session) { setBanner(null); return; }
-
-  socket.emit('room:rejoin', session, (res) => {
-    setBanner(null);
-    if (!res.ok) {
-      // The game is gone (the server restarted, or we were away too long).
-      clearSession();
-      currentRoom = null;
-      myId = null;
-      clearInterval(countdownTimer);
-      stopTicker();
-      showScreen('home');
-      showError(res.error);
-      return;
-    }
-    myId = res.playerId;
-    renderRoom(res.room);
-    // For a game in progress, the server now re-sends the question, the countdown
-    // or the results, and those handlers show the right screen.
-    if (res.room.status === 'lobby') showScreen('lobby');
-  });
-}
-
-// Fires on the first connection AND on every automatic reconnection.
-socket.on('connect', () => syncClock(tryRejoin));
 
 // ============================================================
 // Connection: dropped connections, reconnecting, rejoining
@@ -864,11 +1109,17 @@ socket.on('connect_error', () => {
   setBanner("Can't reach the server. Trying again…");
 });
 
-socket.on('connect_error', () => {
-  setBanner("Can't reach the server. Trying again…");
-});
+// ============================================================
+// On page load
+// ============================================================
+nameInput.value = loadName();
 
+// An invite link looks like /?code=K7Q2X9. Fill the code in automatically.
+const inviteCode = new URLSearchParams(location.search).get('code');
+if (inviteCode) {
+  codeInput.value = inviteCode.toUpperCase().slice(0, 6);
+  if (!nameInput.value) nameInput.focus();
+}
 
 // Until the server answers, show a friendly note. (A free server can take a while to wake up.)
 setBanner('Connecting… the free server can take up to a minute to wake up.');
-

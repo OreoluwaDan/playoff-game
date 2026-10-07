@@ -12,6 +12,7 @@
 </head>
 <body>
   <div id="banner" class="banner" role="status" hidden></div>
+
   <main class="app">
 
     <!-- SCREEN: home -->
@@ -34,6 +35,7 @@
       <input id="nameInput" class="input" type="text" placeholder="Your nickname" maxlength="20"
              autocomplete="off" autocapitalize="words" spellcheck="false" />
       <button id="createBtn" class="btn btn-green">Create room</button>
+      <button id="practiceBtn" class="btn btn-ghost">Practice alone</button>
 
       <p class="divider">or join a friend</p>
 
@@ -44,17 +46,19 @@
       </div>
 
       <p id="error" class="error" role="alert"></p>
+
+      <div class="center"><button id="statsBtn" class="link-btn">My stats</button></div>
     </section>
 
     <!-- SCREEN: lobby -->
     <section id="lobby" class="screen" hidden>
       <header class="screen-head">
         <button id="leaveBtn" class="icon-btn" aria-label="Leave room">&larr;</button>
-        <h2>Waiting room</h2>
+        <h2 id="lobbyTitle">Waiting room</h2>
         <button class="icon-btn sound-toggle" aria-label="Toggle sound"></button>
       </header>
 
-      <div class="code-card">
+      <div id="codeCard" class="code-card">
         <p class="label tight">ROOM CODE</p>
         <div id="roomCode" class="room-code"></div>
         <div class="code-actions">
@@ -63,8 +67,10 @@
         </div>
       </div>
 
-      <p class="label">PLAYERS <span id="playerCount"></span></p>
+      <p id="playersLabel" class="label">PLAYERS <span id="playerCount"></span></p>
       <ul id="playerList" class="player-list"></ul>
+
+      <p id="practiceBest" class="best-line" hidden></p>
 
       <p class="label">DIFFICULTY</p>
       <div id="difficultyTiles" class="tiles">
@@ -103,6 +109,7 @@
       </div>
 
       <ul id="raceList" class="lanes"></ul>
+      <ul id="ghostLane" class="lanes"></ul>
 
       <div class="play">
         <div class="question-card">
@@ -139,6 +146,32 @@
       <button id="rematchBtn" class="btn btn-green">Rematch</button>
       <p id="rematchHint" class="hint" hidden>Waiting for the host to start a rematch&hellip;</p>
       <button id="homeBtn" class="btn btn-ghost">Leave room</button>
+    </section>
+
+    <!-- SCREEN: my stats -->
+    <section id="stats" class="screen" hidden>
+      <header class="screen-head">
+        <button id="statsBack" class="icon-btn" aria-label="Back">&larr;</button>
+        <h2>My stats</h2>
+        <span class="icon-btn" aria-hidden="true"></span>
+      </header>
+
+      <p id="statsName" class="stats-name"></p>
+
+      <div class="stat-row">
+        <div class="stat"><div id="statGames" class="stat-num">0</div><div class="stat-label">Games</div></div>
+        <div class="stat"><div id="statWins" class="stat-num">0</div><div class="stat-label">Wins</div></div>
+        <div class="stat"><div id="statRate" class="stat-num">–</div><div class="stat-label">Win rate</div></div>
+      </div>
+
+      <p class="label">BEST TIMES</p>
+      <div id="bestGrid" class="best-grid"></div>
+
+      <p class="label">RECENT GAMES</p>
+      <ul id="recentList" class="player-list"></ul>
+
+      <div class="center"><button id="resetStatsBtn" class="link-btn danger-link">Reset my stats</button></div>
+      <p id="statsNote" class="hint"></p>
     </section>
 
   </main>

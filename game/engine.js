@@ -289,7 +289,7 @@ function endGame(room, net) {
   results.forEach((r, i) => { r.rank = i + 1; });
 
   // Saved so a player who reconnects after the end can still see the results.
-  game.resultsPayload = { players: results, total: game.questions.length };
+ game.resultsPayload = { players: results, total: game.questions.length, gameId: game.startAt };
   net.toRoom(room.code, 'game:results', game.resultsPayload);
 }
 

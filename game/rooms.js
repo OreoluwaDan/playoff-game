@@ -62,7 +62,7 @@ function makePlayer(socketId, name, color) {
   };
 }
 
-function createRoom(socketId, name) {
+function createRoom(socketId, name, practice) {
   if (rooms.size >= MAX_ROOMS) return { error: 'The server is busy right now. Try again soon.' };
   const cleaned = cleanName(name);
   if (!cleaned) return { error: 'Please enter a nickname.' };
@@ -76,6 +76,7 @@ function createRoom(socketId, name) {
     settings: { difficulty: 'medium', questionCount: 10 },
     players: [player],
     game: null,
+    practice: practice === true,
   };
 
   rooms.set(code, room);
@@ -90,6 +91,7 @@ function joinRoom(code, socketId, name) {
 
   const room = rooms.get(code.trim().toUpperCase());
   if (!room) return { error: 'Room not found. Check the code and try again.' };
+  if (room.practice) return { error: 'Room not found. Check the code and try again.' };
   if (room.status !== 'lobby') return { error: 'That game has already started.' };
   if (room.players.length >= MAX_PLAYERS) return { error: 'That room is full.' };
   if (room.players.some((p) => p.name.toLowerCase() === cleaned.toLowerCase())) {
@@ -189,6 +191,7 @@ function publicState(room) {
     code: room.code,
     hostId: room.hostId,
     status: room.status,
+    practice: room.practice,
     settings: room.settings,
     players: room.players.map((p) => ({
       id: p.id,
