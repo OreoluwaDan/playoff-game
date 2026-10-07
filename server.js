@@ -8,40 +8,51 @@ const { Server } = require('socket.io');
 const rooms = require('./game/rooms');
 const engine = require('./game/engine');
 
+const RECONNECT_GRACE_MS = 60000; // a player who drops has this long to come back
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// The helper we give the game engine so it can send messages without knowing
-// anything about Socket.IO. Every socket automatically sits in a private Socket.IO
-// room named after its own id, so io.to(socketId) reaches just that one player.
+// Every player has a private Socket.IO room named after their permanent id.
+// It follows them across reconnects, so we can always message "just this player".
+const privateRoom = (playerId) => `p:${playerId}`;
+
+// The helper we give the game engine so it never needs to know about Socket.IO.
 const net = {
-  toPlayer: (socketId, event, data) => io.to(socketId).emit(event, data),
+  toPlayer: (playerId, event, data) => io.to(privateRoom(playerId)).emit(event, data),
   toRoom: (roomCode, event, data) => io.to(roomCode).emit(event, data),
 };
 
-// Find the room this socket is in (or null).
-function getMyRoom(socket) {
-  const code = rooms.getRoomCode(socket.id);
-  return code ? rooms.getRoom(code) : null;
+// Who is this socket? Returns { room, playerId } or null.
+function getMe(socket) {
+  const info = rooms.getSocketInfo(socket.id);
+  if (!info) return null;
+  const room = rooms.getRoom(info.code);
+  return room ? { room, playerId: info.playerId } : null;
 }
 
-// Remove a player from their room and tell everyone who is still inside.
-function leaveCurrentRoom(socket) {
-  const room = getMyRoom(socket);
-  if (room) engine.playerLeft(room, net, socket.id);
+// Remove a player for good and tell everyone who is still inside.
+function removeFromRoom(code, playerId) {
+  const room = rooms.getRoom(code);
+  if (!room) return;
+  engine.playerLeft(room, net, playerId);
 
-  const result = rooms.removePlayer(socket.id);
+  const result = rooms.removePlayer(code, playerId);
   if (!result) return;
-  socket.leave(result.code);
+  if (result.room) io.to(code).emit('room:update', rooms.publicState(result.room));
+  else engine.stop(result.closedRoom); // the room is empty and deleted, so cancel its timers
+}
 
-  if (result.room) {
-    io.to(result.code).emit('room:update', rooms.publicState(result.room));
-  } else if (room) {
-    engine.stop(room); // the room is empty and deleted, so cancel its timers
-  }
+// Stops one connection from creating or joining rooms in a rapid-fire loop.
+function tooManyAttempts(socket) {
+  const now = Date.now();
+  const recent = (socket.data.attempts || []).filter((t) => now - t < 60000);
+  recent.push(now);
+  socket.data.attempts = recent;
+  return recent.length > 10;
 }
 
 io.on('connection', (socket) => {
@@ -55,7 +66,8 @@ io.on('connection', (socket) => {
 
   socket.on('room:create', (data, callback) => {
     if (typeof callback !== 'function') return;
-    if (rooms.getRoomCode(socket.id)) {
+    if (tooManyAttempts(socket)) return callback({ ok: false, error: 'Too many tries. Wait a moment.' });
+    if (rooms.getSocketInfo(socket.id)) {
       return callback({ ok: false, error: 'You are already in a room.' });
     }
 
@@ -63,13 +75,20 @@ io.on('connection', (socket) => {
     if (result.error) return callback({ ok: false, error: result.error });
 
     socket.join(result.room.code);
+    socket.join(privateRoom(result.player.id));
     console.log('Room created:', result.room.code);
-    callback({ ok: true, room: rooms.publicState(result.room) });
+    callback({
+      ok: true,
+      playerId: result.player.id,
+      secret: result.player.secret, // only this browser ever receives its secret
+      room: rooms.publicState(result.room),
+    });
   });
 
   socket.on('room:join', (data, callback) => {
     if (typeof callback !== 'function') return;
-    if (rooms.getRoomCode(socket.id)) {
+    if (tooManyAttempts(socket)) return callback({ ok: false, error: 'Too many tries. Wait a moment.' });
+    if (rooms.getSocketInfo(socket.id)) {
       return callback({ ok: false, error: 'You are already in a room.' });
     }
 
@@ -77,56 +96,90 @@ io.on('connection', (socket) => {
     if (result.error) return callback({ ok: false, error: result.error });
 
     socket.join(result.room.code);
+    socket.join(privateRoom(result.player.id));
     const state = rooms.publicState(result.room);
-    callback({ ok: true, room: state });
+    callback({ ok: true, playerId: result.player.id, secret: result.player.secret, room: state });
     io.to(result.room.code).emit('room:update', state);
+  });
+
+  // A browser that lost its connection (or was refreshed) asks to get its seat back.
+  socket.on('room:rejoin', (data, callback) => {
+    if (typeof callback !== 'function') return;
+    const result = rooms.rejoin(data && data.code, data && data.secret, socket.id);
+    if (result.error) return callback({ ok: false, error: result.error });
+
+    const { room, player, oldSocketId } = result;
+    // If the old connection is somehow still open, close it so only one copy of this player exists.
+    if (oldSocketId && oldSocketId !== socket.id) {
+      const old = io.sockets.sockets.get(oldSocketId);
+      if (old) old.disconnect(true);
+    }
+
+    socket.join(room.code);
+    socket.join(privateRoom(player.id));
+    const state = rooms.publicState(room);
+    callback({ ok: true, playerId: player.id, room: state }); // the reply goes out first...
+    io.to(room.code).emit('room:update', state);
+    engine.setAway(room, net, player.id, false);
+    engine.resync(room, net, player.id); // ...then the current question, countdown or results
   });
 
   // The host changes difficulty or number of questions.
   socket.on('room:settings', (data) => {
-    const room = getMyRoom(socket);
-    if (!room || room.hostId !== socket.id || room.status !== 'lobby') return;
-    if (!rooms.setSettings(room, data && data.difficulty, data && data.questionCount)) return;
-    io.to(room.code).emit('room:update', rooms.publicState(room));
+    const me = getMe(socket);
+    if (!me || me.room.hostId !== me.playerId || me.room.status !== 'lobby') return;
+    if (!rooms.setSettings(me.room, data && data.difficulty, data && data.questionCount)) return;
+    io.to(me.room.code).emit('room:update', rooms.publicState(me.room));
   });
 
   // The host presses Start.
   socket.on('game:start', () => {
-    const room = getMyRoom(socket);
-    if (!room || room.hostId !== socket.id || room.status !== 'lobby') return;
-    engine.startGame(room, net);
-    io.to(room.code).emit('room:update', rooms.publicState(room));
+    const me = getMe(socket);
+    if (!me || me.room.hostId !== me.playerId || me.room.status !== 'lobby') return;
+    engine.startGame(me.room, net);
+    io.to(me.room.code).emit('room:update', rooms.publicState(me.room));
   });
 
   // A player submits an answer. The reply goes straight back through "callback".
   socket.on('game:answer', (data, callback) => {
     if (typeof callback !== 'function') return;
-    const room = getMyRoom(socket);
-    if (!room) return callback({ ok: false, error: 'You are not in a room.' });
-    callback(engine.submitAnswer(room, net, socket.id, data && data.answer));
+    const me = getMe(socket);
+    if (!me) return callback({ ok: false, error: 'You are not in a room.' });
+    callback(engine.submitAnswer(me.room, net, me.playerId, data && data.answer));
   });
 
   socket.on('game:skip', (data, callback) => {
     if (typeof callback !== 'function') return;
-    const room = getMyRoom(socket);
-    if (!room) return callback({ ok: false, error: 'You are not in a room.' });
-    callback(engine.submitSkip(room, net, socket.id));
+    const me = getMe(socket);
+    if (!me) return callback({ ok: false, error: 'You are not in a room.' });
+    callback(engine.submitSkip(me.room, net, me.playerId));
   });
 
   // The host presses Rematch.
   socket.on('game:rematch', () => {
-    const room = getMyRoom(socket);
-    if (!room || room.hostId !== socket.id) return;
-    if (engine.rematch(room)) {
-      io.to(room.code).emit('room:update', rooms.publicState(room));
+    const me = getMe(socket);
+    if (!me || me.room.hostId !== me.playerId) return;
+    if (engine.rematch(me.room)) {
+      io.to(me.room.code).emit('room:update', rooms.publicState(me.room));
     }
   });
 
-  socket.on('room:leave', () => leaveCurrentRoom(socket));
+  // The player chose to leave: remove them straight away.
+  socket.on('room:leave', () => {
+    const info = rooms.getSocketInfo(socket.id);
+    if (!info) return;
+    socket.leave(info.code);
+    socket.leave(privateRoom(info.playerId));
+    removeFromRoom(info.code, info.playerId);
+  });
 
+  // The connection dropped. Keep their seat for a while in case they come back.
   socket.on('disconnect', () => {
     console.log('A player left:', socket.id);
-    leaveCurrentRoom(socket);
+    const result = rooms.markDisconnected(socket.id, RECONNECT_GRACE_MS, removeFromRoom);
+    if (!result) return;
+    io.to(result.room.code).emit('room:update', rooms.publicState(result.room));
+    engine.setAway(result.room, net, result.player.id, true);
   });
 });
 
@@ -134,5 +187,3 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`PlayOff is running at http://localhost:${PORT}`);
 });
-
-

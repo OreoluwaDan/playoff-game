@@ -16,6 +16,7 @@ const codeInput = $('codeInput');
 const createBtn = $('createBtn');
 const joinBtn = $('joinBtn');
 const errorEl = $('error');
+const banner = $('banner');
 
 const leaveBtn = $('leaveBtn');
 const roomCodeEl = $('roomCode');
@@ -96,6 +97,8 @@ let tipQuestion = -1;       // which question showed the skip tip (it shows once
 let timeoutMs = 45000;
 let skipPenaltyMs = 15000;
 let laneEls = new Map();    // player id -> pieces of that player's race lane
+let myId = null;            // our permanent player id (it survives reconnects)
+let lockTimer = null;       // counts down the "too many wrong tries" pause
 
 // ============================================================
 // Small helpers
@@ -146,6 +149,26 @@ function makeAvatar(player, big) {
 // browsers (private mode) block storage.
 function saveName(name) { try { localStorage.setItem('playoff-name', name); } catch {} }
 function loadName() { try { return localStorage.getItem('playoff-name') || ''; } catch { return ''; } }
+// The session lets us rejoin our room after a dropped connection or a page refresh.
+// sessionStorage belongs to ONE browser tab, so two windows never share a session.
+function saveSession(code, secret) {
+  try { sessionStorage.setItem('playoff-session', JSON.stringify({ code, secret })); } catch {}
+}
+function loadSession() {
+  try { return JSON.parse(sessionStorage.getItem('playoff-session')); } catch { return null; }
+}
+function clearSession() {
+  try { sessionStorage.removeItem('playoff-session'); } catch {}
+}
+
+// The coloured strip at the top of the page: "Connecting…", "Reconnecting…".
+function setBanner(text) {
+  banner.textContent = text || '';
+  banner.hidden = !text;
+  // No point letting people press Create or Join while there is no connection.
+  createBtn.disabled = !socket.connected;
+  joinBtn.disabled = !socket.connected;
+}
 
 // Old-style copy, used when the modern clipboard is blocked (it is on plain http pages).
 function legacyCopy(text) {
@@ -179,9 +202,12 @@ async function copyText(text, button, doneLabel) {
 // Clock sync: work out how far this device's clock is from the server's,
 // so the countdown ends at the same real moment for everyone.
 // ============================================================
-function syncClock() {
+function syncClock(done) {
   let best = null;
   let remaining = 5;
+  let called = false;
+  const finish = () => { if (!called && done) { called = true; done(); } };
+
   const once = () => {
     const sentAt = Date.now();
     socket.emit('time:ping', (serverTime) => {
@@ -192,22 +218,34 @@ function syncClock() {
         best = { roundTrip, offset: serverTime - (sentAt + gotAt) / 2 };
         clockOffset = best.offset;
       }
+      finish();
       if (--remaining > 0) setTimeout(once, 100);
     });
   };
   once();
+  setTimeout(finish, 3000); // never wait forever, even if the server is slow to answer
 }
-socket.on('connect', syncClock);
+
 
 // ============================================================
 // Home
 // ============================================================
+// ============================================================
+// Home
+// ============================================================
+// Called when the server says "you are in a room".
+function onEntered(res, name) {
+  saveName(name);
+  myId = res.playerId;
+  saveSession(res.room.code, res.secret);
+  enterRoom(res.room);
+}
+
 function join() {
   const name = nameInput.value;
   socket.emit('room:join', { name, code: codeInput.value }, (res) => {
     if (!res.ok) return showError(res.error);
-    saveName(name);
-    enterRoom(res.room);
+    onEntered(res, name);
   });
 }
 
@@ -215,8 +253,7 @@ createBtn.addEventListener('click', () => {
   const name = nameInput.value;
   socket.emit('room:create', { name }, (res) => {
     if (!res.ok) return showError(res.error);
-    saveName(name);
-    enterRoom(res.room);
+    onEntered(res, name);
   });
 });
 
@@ -247,7 +284,7 @@ function renderRoom(room) {
     const name = document.createElement('span');
     name.className = 'name';
     // textContent (not innerHTML) stops anyone sneaking HTML into a nickname.
-    name.textContent = player.name + (player.id === socket.id ? ' (you)' : '');
+    name.textContent = player.name + (player.id === myId ? ' (you)' : '');
     li.append(makeAvatar(player), name);
 
     if (player.id === room.hostId) {
@@ -256,11 +293,18 @@ function renderRoom(room) {
       tag.textContent = 'HOST';
       li.append(tag);
     }
+
+    if (!player.connected) {
+      const away = document.createElement('span');
+      away.className = 'tag muted';
+      away.textContent = 'RECONNECTING…';
+      li.append(away);
+    }
     playerListEl.append(li);
   });
 
   // Only the host can change settings or start the game.
-  const isHost = room.hostId === socket.id;
+  const isHost = room.hostId === myId;
   setTiles(difficultyTiles, room.settings.difficulty, isHost);
   setTiles(countTiles, room.settings.questionCount, isHost);
   startBtn.hidden = !isHost;
@@ -276,11 +320,15 @@ function enterRoom(room) {
 
 function leaveRoom() {
   socket.emit('room:leave');
+  clearSession();
   currentRoom = null;
+  myId = null;
   clearInterval(countdownTimer);
   stopTicker();
   showScreen('home');
 }
+
+
 leaveBtn.addEventListener('click', leaveRoom);
 homeBtn.addEventListener('click', leaveRoom);
 
@@ -424,7 +472,11 @@ function showQuestion(q, message) {
   timeoutMs = q.timeoutMs;
   skipPenaltyMs = q.skipPenaltyMs;
   currentIndex = q.index;
-  questionShownAt = Date.now();
+  questionShownAt = Date.now() - (q.elapsedMs || 0); // right even if we just came back
+  penaltyMs = q.penaltyMs || 0;                      // the server's penalty total
+  goAtLocal = q.startAt - clockOffset;
+  clearInterval(lockTimer);
+  answerInput.readOnly = false;
 
   answerInput.hidden = false;
   skipBtn.hidden = false;
@@ -474,8 +526,28 @@ function shake() {
 }
 answerInput.addEventListener('animationend', () => answerInput.classList.remove('shake'));
 
+// Locks the answer box for a few seconds after too many wrong tries.
+function lockInput(ms) {
+  clearInterval(lockTimer);
+  answerInput.readOnly = true;
+  const until = Date.now() + ms;
+  const update = () => {
+    const left = until - Date.now();
+    if (left <= 0) {
+      clearInterval(lockTimer);
+      answerInput.readOnly = false;
+      feedback.textContent = '';
+      answerInput.focus();
+    } else {
+      feedback.textContent = `Too many wrong tries. Wait ${Math.ceil(left / 1000)}s`;
+    }
+  };
+  update();
+  lockTimer = setInterval(update, 200);
+}
+
 function submitAnswer() {
-  if (busy || finished) return;
+  if (busy || finished || !socket.connected) return;
   const value = answerInput.value.trim();
   if (value.length !== expectedDigits) return; // not finished typing yet
   busy = true;
@@ -483,8 +555,9 @@ function submitAnswer() {
   socket.emit('game:answer', { answer: value }, (res) => {
     busy = false;
     if (!res.ok) {
-      feedback.textContent = res.error;
       answerInput.value = '';
+      if (res.cooldownMs) lockInput(res.cooldownMs);
+      else feedback.textContent = res.error;
       return;
     }
     if (!res.correct) {
@@ -492,16 +565,19 @@ function submitAnswer() {
       answerInput.value = '';
       answerInput.focus();
       shake();
+      Sound.wrong();
+      if (res.cooldownMs) lockInput(res.cooldownMs);
       return;
     }
     // Correct: the reply already contains the next question, so show it at once.
+    Sound.correct();
     if (res.finished) showFinished();
     else showQuestion(res.question);
   });
 }
 
 function submitSkip() {
-  if (busy || finished) return;
+  if (busy || finished || !socket.connected) return;
   busy = true;
   socket.emit('game:skip', {}, (res) => {
     busy = false;
@@ -530,13 +606,13 @@ function renderLanes(players, total) {
     laneEls = new Map();
     players.forEach((p) => {
       const li = document.createElement('li');
-      li.className = 'lane' + (p.id === socket.id ? ' me' : '');
+      li.className = 'lane' + (p.id === myId ? ' me' : '');
 
       const main = document.createElement('div');
       main.className = 'lane-main';
       const name = document.createElement('div');
       name.className = 'lane-name';
-      name.textContent = p.name + (p.id === socket.id ? ' (you)' : '');
+      name.textContent = p.name + (p.id === myId ? ' (you)' : '');
       const track = document.createElement('div');
       track.className = 'track';
       const fill = document.createElement('div');
@@ -558,7 +634,7 @@ function renderLanes(players, total) {
   players.forEach((p) => {
     const lane = laneEls.get(p.id);
     lane.fill.style.width = `${(p.done / total) * 100}%`;
-    lane.count.textContent = p.left ? 'left' : p.finished ? 'done' : `${p.done}/${total}`;
+    lane.count.textContent = p.left ? 'left' : p.away ? 'away' : p.finished ? 'done' : `${p.done}/${total}`;
   });
 }
 socket.on('game:progress', ({ players, total }) => renderLanes(players, total));
@@ -584,7 +660,7 @@ function renderPodium(players) {
 
     const name = document.createElement('div');
     name.className = 'pod-name';
-    name.textContent = p.name + (p.id === socket.id ? ' (you)' : '');
+    name.textContent = p.name + (p.id === myId ? ' (you)' : '');
 
     const time = document.createElement('div');
     time.className = 'pod-time';
@@ -644,7 +720,7 @@ socket.on('game:results', ({ players, total }) => {
   clearInterval(countdownTimer);
   stopTicker();
 
-  const me = players.find((p) => p.id === socket.id);
+  const me = players.find((p) => p.id === myId);
 
   if (me) {
     if (!me.finished) resultTitle.textContent = 'Time is up';
@@ -670,7 +746,7 @@ socket.on('game:results', ({ players, total }) => {
 
     const name = document.createElement('span');
     name.className = 'name';
-    name.textContent = p.name + (p.id === socket.id ? ' (you)' : '');
+    name.textContent = p.name + (p.id === myId ? ' (you)' : '');
 
     const meta = document.createElement('span');
     meta.className = 'meta';
@@ -684,7 +760,7 @@ socket.on('game:results', ({ players, total }) => {
 
   renderChart(me);
 
-  const isHost = currentRoom && currentRoom.hostId === socket.id;
+  const isHost = currentRoom && currentRoom.hostId === myId;
   rematchBtn.hidden = !isHost;
   rematchHint.hidden = isHost;
     // Personal best: saved on this device, separately for each difficulty and question count.
@@ -717,22 +793,82 @@ socket.on('game:results', ({ players, total }) => {
 });
 
 // If the connection drops, the server removes us from the room, so go home.
-socket.on('disconnect', () => {
-  currentRoom = null;
-  clearInterval(countdownTimer);
-  stopTicker();
-  showScreen('home');
-  showError('Connection lost. Please join again.');
+// ============================================================
+// Connection: dropped connections, reconnecting, rejoining
+// ============================================================
+function tryRejoin() {
+  const session = loadSession();
+  if (!session) { setBanner(null); return; }
+
+  socket.emit('room:rejoin', session, (res) => {
+    setBanner(null);
+    if (!res.ok) {
+      // The game is gone (the server restarted, or we were away too long).
+      clearSession();
+      currentRoom = null;
+      myId = null;
+      clearInterval(countdownTimer);
+      stopTicker();
+      showScreen('home');
+      showError(res.error);
+      return;
+    }
+    myId = res.playerId;
+    renderRoom(res.room);
+    // For a game in progress, the server now re-sends the question, the countdown
+    // or the results, and those handlers show the right screen.
+    if (res.room.status === 'lobby') showScreen('lobby');
+  });
+}
+
+// Fires on the first connection AND on every automatic reconnection.
+socket.on('connect', () => syncClock(tryRejoin));
+
+// ============================================================
+// Connection: dropped connections, reconnecting, rejoining
+// ============================================================
+function tryRejoin() {
+  const session = loadSession();
+  if (!session) { setBanner(null); return; }
+
+  socket.emit('room:rejoin', session, (res) => {
+    setBanner(null);
+    if (!res.ok) {
+      // The game is gone (the server restarted, or we were away too long).
+      clearSession();
+      currentRoom = null;
+      myId = null;
+      clearInterval(countdownTimer);
+      stopTicker();
+      showScreen('home');
+      showError(res.error);
+      return;
+    }
+    myId = res.playerId;
+    renderRoom(res.room);
+    // For a game in progress, the server now re-sends the question, the countdown
+    // or the results, and those handlers show the right screen.
+    if (res.room.status === 'lobby') showScreen('lobby');
+  });
+}
+
+// Fires on the first connection AND on every automatic reconnection.
+socket.on('connect', () => syncClock(tryRejoin));
+
+socket.on('disconnect', (reason) => {
+  setBanner('Connection lost. Reconnecting…');
+  if (reason === 'io server disconnect') socket.connect(); // the server hung up: knock again
 });
 
-// ============================================================
-// On page load
-// ============================================================
-nameInput.value = loadName();
+socket.on('connect_error', () => {
+  setBanner("Can't reach the server. Trying again…");
+});
 
-// An invite link looks like /?code=K7Q2X9. Fill the code in automatically.
-const inviteCode = new URLSearchParams(location.search).get('code');
-if (inviteCode) {
-  codeInput.value = inviteCode.toUpperCase().slice(0, 6);
-  if (!nameInput.value) nameInput.focus();
-}
+socket.on('connect_error', () => {
+  setBanner("Can't reach the server. Trying again…");
+});
+
+
+// Until the server answers, show a friendly note. (A free server can take a while to wake up.)
+setBanner('Connecting… the free server can take up to a minute to wake up.');
+

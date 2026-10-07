@@ -1,9 +1,9 @@
 // game/engine.js
 // The referee. It owns the rules: countdown, checking answers, timing, penalties,
-// skip, auto-skip and working out the winner.
+// skip, auto-skip, the streak bonus and working out the winner.
 //
 // It never talks to browsers directly. server.js hands it a small "net" helper:
-//   net.toPlayer(socketId, eventName, data)  -> message one player
+//   net.toPlayer(playerId, eventName, data)  -> message one player
 //   net.toRoom(roomCode, eventName, data)    -> message everyone in the room
 
 const { generateQuestions } = require('./questions');
@@ -16,21 +16,26 @@ const GRACE_MS = 60000;             // after the first finisher, others get this
 const STREAK_NEEDED = 3;            // right first time this many in a row...
 const STREAK_BONUS_MS = 500;        // ...and each such answer after that takes off 0.5s
 const MIN_ACTION_GAP_MS = 150;      // ignore answers sent faster than this (anti-spam)
+const WRONG_RUN_LIMIT = 5;          // this many wrong answers in a row on one question...
+const WRONG_COOLDOWN_MS = 3000;     // ...locks the answer box for this long
 
 // What a player is allowed to see about a question: NO answer in here.
 function questionPayload(game, player, reason) {
+  const q = game.questions[player.index];
   return {
     index: player.index,
     total: game.questions.length,
-    text: game.questions[player.index].text,
+    text: q.text,
     // How many digits the answer has, so the browser knows when to check.
-    digits: String(game.questions[player.index].answer).length,
+    digits: String(q.answer).length,
     timeoutMs: QUESTION_TIMEOUT_MS,
     skipPenaltyMs: SKIP_PENALTY_MS,
+    penaltyMs: player.penaltyMs,   // so a returning player's timer is right
+    startAt: game.startAt,         // the GO moment, on the server's clock
+    elapsedMs: Math.max(0, Date.now() - player.questionStartedAt),
     reason: reason || null,
   };
 }
-
 
 // A finished player's final time: real time + penalties - streak bonus.
 function totalMs(game, p) {
@@ -49,6 +54,7 @@ function sendProgress(room, net) {
       done: p.index, // how many questions this player has got past
       finished: p.finishedAt !== null,
       left: p.left,
+      away: p.away,  // connection dropped, but they may still come back
     })),
   });
 }
@@ -63,6 +69,7 @@ function startGame(room, net) {
     startTimer: null,
     graceTimer: null,
     over: false,
+    resultsPayload: null,
     players: new Map(),
   };
 
@@ -77,11 +84,14 @@ function startGame(room, net) {
       wrongs: 0,
       skips: 0,
       streak: 0,
+      wrongRun: 0,           // wrong answers in a row on the current question
+      lockedUntil: 0,        // answers are refused until this time (the cooldown)
       wrongOnCurrent: false, // did they already get this question wrong?
       questionStartedAt: startAt,
       lastActionAt: 0,
       finishedAt: null,
       left: false,
+      away: !p.connected,
       timer: null,           // the auto-skip timer
       times: [],             // how long each question took
     });
@@ -131,6 +141,8 @@ function moveOn(room, net, p, now, reason) {
   const game = room.game;
   p.index++;
   p.wrongOnCurrent = false;
+  p.wrongRun = 0;
+  p.lockedUntil = 0;
 
   if (p.index >= game.questions.length) {
     finishPlayer(room, net, p, now);
@@ -169,6 +181,9 @@ function submitAnswer(room, net, playerId, raw) {
   if (!p) return { ok: false, error: 'You cannot answer right now.' };
 
   const now = Date.now();
+  if (now < p.lockedUntil) {
+    return { ok: false, error: 'Too many wrong tries. Wait a moment.', cooldownMs: p.lockedUntil - now };
+  }
   if (now - p.lastActionAt < MIN_ACTION_GAP_MS) {
     return { ok: false, error: 'Slow down a little.' };
   }
@@ -181,10 +196,16 @@ function submitAnswer(room, net, playerId, raw) {
   const game = room.game;
   const question = game.questions[p.index];
 
-    if (Number(text) !== question.answer) {
+  if (Number(text) !== question.answer) {
     p.wrongs++;
     p.streak = 0;
     p.wrongOnCurrent = true;
+    p.wrongRun++;
+    if (p.wrongRun >= WRONG_RUN_LIMIT) {
+      p.wrongRun = 0;
+      p.lockedUntil = now + WRONG_COOLDOWN_MS;
+      return { ok: true, correct: false, cooldownMs: WRONG_COOLDOWN_MS };
+    }
     return { ok: true, correct: false };
   }
 
@@ -267,11 +288,41 @@ function endGame(room, net) {
   });
   results.forEach((r, i) => { r.rank = i + 1; });
 
-  net.toRoom(room.code, 'game:results', { players: results, total: game.questions.length });
+  // Saved so a player who reconnects after the end can still see the results.
+  game.resultsPayload = { players: results, total: game.questions.length };
+  net.toRoom(room.code, 'game:results', game.resultsPayload);
 }
 
-// ---------- Leaving, cleanup, rematch ----------
+// ---------- Connections, leaving, cleanup, rematch ----------
 
+// A player's connection dropped (away = true) or came back (away = false).
+function setAway(room, net, playerId, away) {
+  const game = room.game;
+  if (!game || game.over) return;
+  const p = game.players.get(playerId);
+  if (!p) return;
+  p.away = away;
+  sendProgress(room, net);
+}
+
+// A player came back: send them whatever they need to carry on where they were.
+function resync(room, net, playerId) {
+  const game = room.game;
+  if (!game) return;
+
+  if (room.status === 'countdown') {
+    net.toPlayer(playerId, 'game:countdown', { startAt: game.startAt, serverNow: Date.now() });
+  } else if (room.status === 'playing') {
+    const p = game.players.get(playerId);
+    if (!p || p.left) return;
+    if (p.finishedAt !== null) net.toPlayer(playerId, 'game:finished', {});
+    else net.toPlayer(playerId, 'game:question', questionPayload(game, p));
+  } else if (room.status === 'finished' && game.resultsPayload) {
+    net.toPlayer(playerId, 'game:results', game.resultsPayload);
+  }
+}
+
+// A player left for good (or their time to reconnect ran out).
 function playerLeft(room, net, playerId) {
   const game = room.game;
   if (!game || game.over) return;
@@ -302,4 +353,7 @@ function rematch(room) {
   return true;
 }
 
-module.exports = { startGame, beginRace, submitAnswer, submitSkip, playerLeft, stop, rematch };
+module.exports = {
+  startGame, beginRace, submitAnswer, submitSkip,
+  setAway, resync, playerLeft, stop, rematch,
+};

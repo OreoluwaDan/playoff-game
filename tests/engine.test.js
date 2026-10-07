@@ -12,7 +12,7 @@ function makeRoom(names, questionCount = 5) {
     hostId: 'p1',
     status: 'lobby',
     settings: { difficulty: 'easy', questionCount },
-    players: names.map((name, i) => ({ id: `p${i + 1}`, name, color: '#000000' })),
+    players: names.map((name, i) => ({ id: `p${i + 1}`, name, color: '#000000', connected: true })),
   };
   const events = [];
   const net = {
@@ -165,6 +165,30 @@ test('a wrong answer breaks the streak', () => {
     answerCorrectly(room, net, 'p1');
     answerCorrectly(room, net, 'p1');
     assert.equal(p.bonusMs, 0);
+  } finally {
+    engine.stop(room);
+  }
+});
+
+test('five wrong answers in a row trigger a short cooldown', () => {
+  const { room, net } = makeRoom(['Ada']);
+  try {
+    startNow(room, net);
+    const p = room.game.players.get('p1');
+    const wrong = String(room.game.questions[0].answer + 1);
+    let last;
+    for (let i = 0; i < 5; i++) {
+      p.lastActionAt = 0;
+      last = engine.submitAnswer(room, net, 'p1', wrong);
+    }
+    assert.equal(last.correct, false);
+    assert.equal(last.cooldownMs, 3000);
+
+    // Even the RIGHT answer is refused while the box is locked.
+    p.lastActionAt = 0;
+    const blocked = engine.submitAnswer(room, net, 'p1', String(room.game.questions[0].answer));
+    assert.equal(blocked.ok, false);
+    assert.ok(blocked.cooldownMs > 0);
   } finally {
     engine.stop(room);
   }

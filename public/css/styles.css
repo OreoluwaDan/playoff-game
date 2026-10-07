@@ -339,3 +339,13 @@ button { font-family: inherit; cursor: pointer; }
 @keyframes confettiFall {
   to { transform: translate3d(var(--drift), 110vh, 0) rotate(var(--spin)); }
 }
+
+
+/* ---------- Stage 8A: connection banner and answer lock ---------- */
+.banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 60;
+  padding: max(8px, env(safe-area-inset-top)) 16px 8px;
+  text-align: center; font-size: 0.85rem; font-weight: 800;
+  color: #fff; background: var(--orange);
+}
+.answer[readonly] { background: #fff5f5; border-color: var(--red); }
