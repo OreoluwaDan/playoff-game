@@ -1284,4 +1284,4 @@ if (inviteCode) codeInput.value = inviteCode.toUpperCase().slice(0, 6);
 goHome(); // shows the home screen, or the welcome screen for a new player
 
 // Until the server answers, show a friendly note. (A free server can take a while to wake up.)
-setBanner('Connecting… the free server can take up to a minute to wake up.');
+setBanner('Connecting… the free server can take up to a minute to wake up.');  
