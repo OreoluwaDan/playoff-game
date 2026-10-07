@@ -56,8 +56,7 @@ const countInfo = $('countInfo');
 const progressFill = $('progressFill');
 const timerEl = $('timer');
 const penPop = $('penPop');
-const raceList = $('raceList');
-const ghostLane = $('ghostLane');
+const raceTrack = $('raceTrack');
 const qProgress = $('qProgress');
 const questionText = $('questionText');
 const answerInput = $('answerInput');
@@ -141,7 +140,7 @@ let skipPenaltyMs = 15000;
 let laneEls = new Map();    // player id -> pieces of that player's race lane
 let ghostReady = false;     // has the practice "PB" lane been set up for this game?
 let ghostBestMs = 0;        // the best time the ghost lane follows (0 = no ghost)
-let ghostFill = null;       // the ghost lane's coloured bar
+let ghostDot = null;        // the practice "PB" dot on the race track
 let setupMode = 'new';      // 'new' (first visit) or 'edit' (changing the profile)
 let setupAvatar = 0;        // the avatar chosen on the setup screen
 
@@ -725,9 +724,8 @@ function resetGameUI() {
   laneEls = new Map();
   ghostReady = false;
   ghostBestMs = 0;
-  ghostFill = null;
-  raceList.innerHTML = '';
-  ghostLane.innerHTML = '';
+  ghostDot = null;
+  raceTrack.querySelectorAll('.race-dot').forEach((d) => d.remove());
   progressFill.style.width = '0%';
   timerEl.textContent = '0:00.0';
   feedback.textContent = '';
@@ -737,6 +735,7 @@ function resetGameUI() {
   skipBtn.hidden = false;
   finishedMsg.hidden = true;
 }
+
 
 socket.on('game:countdown', ({ startAt }) => {
   resetGameUI();
@@ -797,8 +796,8 @@ function tickGame() {
   timerEl.textContent = formatTime(runMs + penaltyMs);
 
   // The practice ghost moves at a steady pace across your best time.
-  if (ghostFill && ghostBestMs > 0) {
-    ghostFill.style.width = `${Math.min(100, (runMs / ghostBestMs) * 100)}%`;
+  if (ghostDot && ghostBestMs > 0) {
+    ghostDot.style.left = `${Math.min(100, (runMs / ghostBestMs) * 100)}%`;
   }
 
   const elapsed = Date.now() - questionShownAt;
@@ -829,43 +828,21 @@ function showPenaltyPop(ms) {
 // In practice with a saved best time, add a grey "PB" lane that follows that pace.
 function setupGhost() {
   ghostReady = true;
-  ghostLane.innerHTML = '';
   ghostBestMs = 0;
-  ghostFill = null;
+  ghostDot = null;
+  raceTrack.querySelectorAll('.race-dot.ghost').forEach((d) => d.remove());
   if (!currentRoom || !currentRoom.practice) return;
 
   const best = getBest(currentRoom.settings.difficulty, currentRoom.settings.questionCount);
   if (!best) return;
   ghostBestMs = best;
 
-  const li = document.createElement('li');
-  li.className = 'lane ghost';
-
-  const badge = document.createElement('span');
-  badge.className = 'avatar';
-  badge.style.background = '#cfcfcf';
-  badge.style.color = '#ffffff';
-  badge.textContent = 'PB';
-
-  const main = document.createElement('div');
-  main.className = 'lane-main';
-  const name = document.createElement('div');
-  name.className = 'lane-name';
-  name.textContent = `Your best (${formatTime(best)})`;
-  const track = document.createElement('div');
-  track.className = 'track';
-  const fill = document.createElement('div');
-  fill.className = 'fill';
-  fill.style.background = '#cfcfcf';
-  track.append(fill);
-  main.append(name, track);
-
-  const spacer = document.createElement('span');
-  spacer.className = 'lane-count';
-
-  li.append(badge, main, spacer);
-  ghostLane.append(li);
-  ghostFill = fill;
+  const dot = document.createElement('span');
+  dot.className = 'race-dot ghost';
+  dot.title = `Your best (${formatTime(best)})`;
+  dot.style.left = '0%';
+  raceTrack.append(dot);
+  ghostDot = dot;
 }
 
 function showQuestion(q, message) {
@@ -1005,42 +982,28 @@ answerInput.addEventListener('input', () => {
 
 // ----- Race lanes: everyone's progress, live -----
 function renderLanes(players, total) {
-  const sameLanes = players.length === laneEls.size && players.every((p) => laneEls.has(p.id));
+  const same = players.length === laneEls.size && players.every((p) => laneEls.has(p.id));
 
-  if (!sameLanes) {
-    raceList.innerHTML = '';
+  if (!same) {
+    raceTrack.querySelectorAll('.race-dot:not(.ghost)').forEach((d) => d.remove());
     laneEls = new Map();
-    players.forEach((p) => {
-      const li = document.createElement('li');
-      li.className = 'lane' + (p.id === myId ? ' me' : '');
-
-      const main = document.createElement('div');
-      main.className = 'lane-main';
-      const name = document.createElement('div');
-      name.className = 'lane-name';
-      name.textContent = p.name + (p.id === myId ? ' (you)' : '');
-      const track = document.createElement('div');
-      track.className = 'track';
-      const fill = document.createElement('div');
-      fill.className = 'fill';
-      fill.style.background = p.color;
-      track.append(fill);
-      main.append(name, track);
-
-      const count = document.createElement('span');
-      count.className = 'lane-count';
-
-      li.append(makeAvatar(p), main, count);
-      raceList.append(li);
-      laneEls.set(p.id, { fill, count });
+    players.forEach((p, i) => {
+      const dot = document.createElement('span');
+      dot.className = 'race-dot' + (p.id === myId ? ' me' : '');
+      dot.style.background = p.color;
+      // Stagger the dots up and down a little so players at the same spot don't hide each other.
+      dot.style.setProperty('--dy', `${((i % 3) - 1) * 9}px`);
+      dot.title = p.name + (p.id === myId ? ' (you)' : '');
+      raceTrack.append(dot);
+      laneEls.set(p.id, dot);
     });
   }
 
-  // Update the existing lanes in place, so the bars slide instead of jumping.
+  // Move the existing dots, so they slide instead of jumping.
   players.forEach((p) => {
-    const lane = laneEls.get(p.id);
-    lane.fill.style.width = `${(p.done / total) * 100}%`;
-    lane.count.textContent = p.left ? 'left' : p.away ? 'away' : p.finished ? 'done' : `${p.done}/${total}`;
+    const dot = laneEls.get(p.id);
+    dot.style.left = `${(p.done / total) * 100}%`;
+    dot.classList.toggle('away', !!(p.away || p.left));
   });
 }
 socket.on('game:progress', ({ players, total }) => renderLanes(players, total));

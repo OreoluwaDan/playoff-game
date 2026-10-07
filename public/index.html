@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="theme-color" content="#ffffff" />
   <title>PlayOff</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -133,16 +133,19 @@
 
     <!-- SCREEN: game -->
     <section id="game" class="screen" hidden>
-      <div class="topbar">
-        <div class="progress"><div id="progressFill" class="progress-fill"></div></div>
-        <div class="timer-wrap">
-          <span id="timer">0:00.0</span>
-          <span id="penPop" class="pen-pop"></span>
+        <div class="game-head">
+        <div class="topbar">
+          <div class="progress"><div id="progressFill" class="progress-fill"></div></div>
+          <div class="timer-wrap">
+            <span id="timer">0:00.0</span>
+            <span id="penPop" class="pen-pop"></span>
+          </div>
+        </div>
+        <div id="raceTrack" class="race-track" aria-label="Race progress">
+          <div class="race-line"></div>
+          <div class="race-end"></div>
         </div>
       </div>
-
-      <ul id="raceList" class="lanes"></ul>
-      <ul id="ghostLane" class="lanes"></ul>
 
       <div class="play">
         <div class="question-card">

@@ -435,3 +435,40 @@ button { font-family: inherit; cursor: pointer; }
 .help-item { margin: 0 0 14px; }
 .help-item h3 { margin: 0 0 4px; font-size: 1rem; font-weight: 900; }
 .help-item p { margin: 0; font-size: 0.92rem; font-weight: 700; color: #777; }
+
+/* ---------- Stage 8D: slim race track ---------- */
+.game-head {
+  position: sticky; top: 0; z-index: 5;
+  padding-top: 4px; background: #fff;
+}
+.race-track { position: relative; height: 46px; margin: 2px 14px 12px; }
+.race-line {
+  position: absolute; left: 0; right: 0; top: 50%;
+  height: 8px; margin-top: -4px; border-radius: 4px; background: var(--border);
+}
+.race-end {
+  position: absolute; right: 0; top: 50%;
+  width: 6px; height: 26px; margin-top: -13px; border-radius: 3px; background: var(--muted);
+}
+.race-dot {
+  position: absolute; top: 50%; left: 0; z-index: 1;
+  width: 20px; height: 20px; margin: -10px 0 0 -10px;
+  border-radius: 50%; border: 3px solid #fff;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
+  transform: translateY(var(--dy, 0px));
+  transition: left 0.35s ease, opacity 0.2s;
+}
+.race-dot.me {
+  z-index: 3; width: 26px; height: 26px; margin: -13px 0 0 -13px;
+  box-shadow: 0 0 0 3px rgba(75, 75, 75, 0.35);
+}
+.race-dot.ghost { z-index: 2; background: #cfcfcf; }
+.race-dot.away { opacity: 0.35; }
+
+/* Short screens (a phone with the keyboard open): make everything a bit more compact. */
+@media (max-height: 640px) {
+  .topbar { margin-bottom: 6px; }
+  .race-track { margin-bottom: 6px; }
+  .question-card { margin-bottom: 12px; padding: 10px 8px 14px; }
+  .question { font-size: clamp(2rem, 9vw, 2.8rem); }
+}
