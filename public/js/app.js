@@ -5,21 +5,36 @@ const socket = io();
 const $ = (id) => document.getElementById(id);
 
 // ----- Screens: only one is visible at a time -----
-const SCREENS = ['home', 'lobby', 'countdown', 'game', 'results', 'stats'];
+const SCREENS = ['welcome', 'home', 'lobby', 'countdown', 'game', 'results', 'profile'];
 function showScreen(name) {
   SCREENS.forEach((s) => { $(s).hidden = s !== name; });
 }
 
 // ----- Page elements -----
-const nameInput = $('nameInput');
-const codeInput = $('codeInput');
+// welcome / edit profile
+const setupBack = $('setupBack');
+const setupHeading = $('setupHeading');
+const setupSub = $('setupSub');
+const setupName = $('setupName');
+const avatarGrid = $('avatarGrid');
+const setupError = $('setupError');
+const setupBtn = $('setupBtn');
+
+// home
+const profileBtn = $('profileBtn');
+const homeAvatar = $('homeAvatar');
+const homeGreeting = $('homeGreeting');
+const helpBtn = $('helpBtn');
 const createBtn = $('createBtn');
 const practiceBtn = $('practiceBtn');
+const codeInput = $('codeInput');
 const joinBtn = $('joinBtn');
-const statsBtn = $('statsBtn');
 const errorEl = $('error');
 const banner = $('banner');
+const help = $('help');
+const helpClose = $('helpClose');
 
+// lobby
 const leaveBtn = $('leaveBtn');
 const lobbyTitle = $('lobbyTitle');
 const codeCard = $('codeCard');
@@ -35,9 +50,9 @@ const countTiles = $('countTiles');
 const startBtn = $('startBtn');
 const lobbyHint = $('lobbyHint');
 
+// countdown and game
 const countNumber = $('countNumber');
 const countInfo = $('countInfo');
-
 const progressFill = $('progressFill');
 const timerEl = $('timer');
 const penPop = $('penPop');
@@ -52,6 +67,7 @@ const skipBtn = $('skipBtn');
 const skipPen = $('skipPen');
 const finishedMsg = $('finishedMsg');
 
+// results
 const resultTitle = $('resultTitle');
 const resultSub = $('resultSub');
 const bestLine = $('bestLine');
@@ -64,14 +80,19 @@ const rematchBtn = $('rematchBtn');
 const rematchHint = $('rematchHint');
 const homeBtn = $('homeBtn');
 
-const statsBack = $('statsBack');
-const statsName = $('statsName');
+// profile
+const profileBack = $('profileBack');
+const profileEditBtn = $('profileEditBtn');
+const profileAvatar = $('profileAvatar');
+const profileNameEl = $('profileName');
+const profileSince = $('profileSince');
 const statGames = $('statGames');
 const statWins = $('statWins');
 const statRate = $('statRate');
 const bestGrid = $('bestGrid');
 const recentList = $('recentList');
 const resetStatsBtn = $('resetStatsBtn');
+const switchBtn = $('switchBtn');
 const statsNote = $('statsNote');
 
 // ----- Sound on/off -----
@@ -100,6 +121,7 @@ document.addEventListener('pointerdown', () => Sound.unlock(), { once: true });
 document.addEventListener('keydown', () => Sound.unlock(), { once: true });
 
 // ----- State -----
+let myProfile = null;       // { name, avatar, createdAt } saved on this device, or null
 let currentRoom = null;     // the room we are in, or null on the home screen
 let myId = null;            // our permanent player id (it survives reconnects)
 let clockOffset = 0;        // (server clock) minus (this device's clock), in ms
@@ -120,6 +142,8 @@ let laneEls = new Map();    // player id -> pieces of that player's race lane
 let ghostReady = false;     // has the practice "PB" lane been set up for this game?
 let ghostBestMs = 0;        // the best time the ghost lane follows (0 = no ghost)
 let ghostFill = null;       // the ghost lane's coloured bar
+let setupMode = 'new';      // 'new' (first visit) or 'edit' (changing the profile)
+let setupAvatar = 0;        // the avatar chosen on the setup screen
 
 // ============================================================
 // Small helpers
@@ -157,6 +181,7 @@ function readableText(hex) {
   return brightness > 0.7 ? '#4b4b4b' : '#ffffff';
 }
 
+// The coloured initials circle used for players inside a room.
 function makeAvatar(player, big) {
   const el = document.createElement('span');
   el.className = 'avatar' + (big ? ' lg' : '');
@@ -167,7 +192,6 @@ function makeAvatar(player, big) {
 }
 
 // ----- Saving things on this device (wrapped in try/catch: some browsers block storage) -----
-function saveName(name) { try { localStorage.setItem('playoff-name', name); } catch {} }
 function loadName() { try { return localStorage.getItem('playoff-name') || ''; } catch { return ''; } }
 
 function readJSON(key, fallback) {
@@ -231,6 +255,123 @@ async function copyText(text, button, doneLabel) {
 }
 
 // ============================================================
+// Profile: name + avatar, saved on this device
+// ============================================================
+const PROFILE_KEY = 'playoff-profile';
+
+// The 12 avatars. Each is a colour plus a simple white shape we drew ourselves.
+// These are our own fixed strings, never typed by a player, so putting them
+// into the page as HTML is safe.
+const AVATARS = [
+  { color: '#58CC02', icon: '<polygon points="12,2 15,9 22,9.5 16.5,14 18.5,21 12,17 5.5,21 7.5,14 2,9.5 9,9"/>' },
+  { color: '#1CB0F6', icon: '<polygon points="13,2 4,14 11,14 10,22 20,10 13,10"/>' },
+  { color: '#FF4B4B', icon: '<path d="M12 21C5 16.5 2 12.5 2 8.5 2 5.5 4.3 3.5 7 3.5c2 0 3.8 1.1 5 3 1.2-1.9 3-3 5-3 2.7 0 5 2 5 5 0 4-3 8-10 12.5z"/>' },
+  { color: '#FF9600', icon: '<path d="M12 2c1 4 6 6 6 12a6 6 0 0 1-12 0c0-3 2-4.5 3-7 .5 2 1.5 3 2 3 .5-3 0-5 1-8z"/>' },
+  { color: '#CE82FF', icon: '<polygon points="12,2 22,12 12,22 2,12"/>' },
+  { color: '#2B70C9', icon: '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4 6.5 6.5 0 0 0 20 14.5z"/>' },
+  { color: '#F5A300', icon: '<polygon points="3,19 3,8 8,12.5 12,5 16,12.5 21,8 21,19"/>' },
+  { color: '#00B894', icon: '<path d="M5 19C5 10 10 5 20 4c0 10-5 15-14 15z"/>' },
+  { color: '#FF86D0', icon: '<circle cx="8.5" cy="10" r="2.3"/><circle cx="15.5" cy="10" r="2.3"/><path d="M7.5 15.5Q12 19.5 16.5 15.5" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round"/>' },
+  { color: '#7C5CFF', icon: '<circle cx="12" cy="12" r="8" fill="none" stroke="#fff" stroke-width="3"/><circle cx="12" cy="12" r="2.5"/>' },
+  { color: '#FF7A59', icon: '<circle cx="12" cy="12" r="4.5"/><g stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></g>' },
+  { color: '#4B4B4B', icon: '<path d="M12 2C8 8 5 11 5 15a7 7 0 0 0 14 0c0-4-3-7-7-13z"/>' },
+];
+
+// Draws one profile avatar at the given size (in pixels).
+function avatarEl(index, size) {
+  const a = AVATARS[index] || AVATARS[0];
+  const el = document.createElement('span');
+  el.className = 'pf-avatar';
+  el.style.width = `${size}px`;
+  el.style.height = `${size}px`;
+  el.style.background = a.color;
+  const inner = Math.round(size * 0.58);
+  el.innerHTML = `<svg viewBox="0 0 24 24" width="${inner}" height="${inner}" fill="#fff" aria-hidden="true">${a.icon}</svg>`;
+  return el;
+}
+
+// Reads the saved profile and checks it is sensible. Returns null if there is none.
+function loadProfile() {
+  const p = readJSON(PROFILE_KEY, null);
+  if (!p || typeof p.name !== 'string' || !p.name.trim()) return null;
+  return {
+    name: p.name.trim().slice(0, 20),
+    avatar: Number.isInteger(p.avatar) && p.avatar >= 0 && p.avatar < AVATARS.length ? p.avatar : 0,
+    createdAt: Number.isFinite(p.createdAt) ? p.createdAt : Date.now(),
+  };
+}
+
+// Show the home screen, or the welcome screen if there is no profile yet.
+function goHome() {
+  if (!myProfile) { openSetup('new'); return; }
+  homeGreeting.textContent = `Hi, ${myProfile.name}`; // textContent: safe even if the name has odd characters
+  homeAvatar.replaceChildren(avatarEl(myProfile.avatar, 36));
+  showScreen('home');
+}
+
+// ----- The setup screen (used for both "Get started" and "Edit profile") -----
+function buildAvatarGrid() {
+  avatarGrid.innerHTML = '';
+  AVATARS.forEach((_, i) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'avatar-opt';
+    btn.setAttribute('aria-label', `Avatar ${i + 1}`);
+    btn.append(avatarEl(i, 52));
+    btn.addEventListener('click', () => { setupAvatar = i; markAvatar(); });
+    avatarGrid.append(btn);
+  });
+}
+
+function markAvatar() {
+  [...avatarGrid.children].forEach((btn, i) => {
+    btn.classList.toggle('on', i === setupAvatar);
+    btn.setAttribute('aria-pressed', i === setupAvatar ? 'true' : 'false');
+  });
+}
+
+function openSetup(mode) {
+  const editing = mode === 'edit' && !!myProfile;
+  setupMode = editing ? 'edit' : 'new';
+  setupBack.hidden = !editing;
+  setupHeading.textContent = editing ? 'Edit profile' : 'Welcome to PlayOff';
+  setupSub.textContent = editing ? 'Change your name or avatar.' : 'Pick a name and an avatar to get started.';
+  setupBtn.textContent = editing ? 'Save' : 'Get started';
+  setupName.value = editing ? myProfile.name : loadName(); // loadName() carries over an older nickname
+  setupAvatar = editing ? myProfile.avatar : 0;
+  setupError.textContent = '';
+  markAvatar();
+  showScreen('welcome');
+}
+
+function submitSetup() {
+  const name = setupName.value.trim().replace(/\s+/g, ' ').slice(0, 20);
+  if (!name) {
+    setupError.textContent = 'Please enter a name.';
+    setupName.focus();
+    return;
+  }
+  const createdAt = setupMode === 'edit' && myProfile ? myProfile.createdAt : Date.now();
+  myProfile = { name, avatar: setupAvatar, createdAt };
+  writeJSON(PROFILE_KEY, myProfile); // if the browser blocks storage, the profile just lasts until the page closes
+
+  if (setupMode === 'edit') { renderProfile(); showScreen('profile'); }
+  else goHome();
+}
+
+setupBtn.addEventListener('click', submitSetup);
+setupName.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitSetup(); });
+setupBack.addEventListener('click', () => { renderProfile(); showScreen('profile'); });
+
+// ----- The "How to play" card -----
+function openHelp() { help.hidden = false; helpClose.focus(); }
+function closeHelp() { help.hidden = true; }
+helpBtn.addEventListener('click', openHelp);
+helpClose.addEventListener('click', closeHelp);
+help.addEventListener('click', (e) => { if (e.target === help) closeHelp(); }); // tap outside the card
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !help.hidden) closeHelp(); });
+
+// ============================================================
 // Stats: best times, totals and game history (all saved on THIS device)
 // ============================================================
 const HISTORY_KEY = 'playoff-history';
@@ -275,15 +416,21 @@ function recordGame(entry) {
   return true;
 }
 
-function renderStats() {
+// Fills in the whole profile screen.
+function renderProfile() {
+  if (!myProfile) return;
+
+  profileAvatar.replaceChildren(avatarEl(myProfile.avatar, 84));
+  profileNameEl.textContent = myProfile.name;
+  profileSince.textContent =
+    `Playing since ${new Date(myProfile.createdAt).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}`;
+
   const saved = readJSON(TOTALS_KEY, null);
   const totals = {
     games: (saved && saved.games) || 0,
     wins: (saved && saved.wins) || 0,
     versus: (saved && saved.versus) || 0,
   };
-
-  statsName.textContent = loadName() || 'Player';
   statGames.textContent = totals.games;
   statWins.textContent = totals.wins;
   statRate.textContent = totals.versus ? `${Math.round((totals.wins / totals.versus) * 100)}%` : '–';
@@ -346,14 +493,16 @@ function renderStats() {
   } catch { canSave = false; }
   statsNote.textContent = canSave
     ? 'Saved on this device only. Clearing your browser data erases it.'
-    : "This browser is blocking storage, so stats can't be saved here.";
+    : "This browser is blocking storage, so your profile and stats can't be saved here.";
 }
 
-statsBtn.addEventListener('click', () => { renderStats(); showScreen('stats'); });
-statsBack.addEventListener('click', () => showScreen('home'));
+profileBtn.addEventListener('click', () => { renderProfile(); showScreen('profile'); });
+profileBack.addEventListener('click', goHome);
+profileEditBtn.addEventListener('click', () => openSetup('edit'));
 
+// Reset stats: keeps your profile, deletes games and best times.
 resetStatsBtn.addEventListener('click', () => {
-  if (!window.confirm('Delete all your saved stats and best times on this device?')) return;
+  if (!window.confirm('Delete your game history and best times? Your profile is kept.')) return;
   try {
     localStorage.removeItem(HISTORY_KEY);
     localStorage.removeItem(TOTALS_KEY);
@@ -361,7 +510,21 @@ resetStatsBtn.addEventListener('click', () => {
       .filter((key) => key.startsWith('playoff-best-'))
       .forEach((key) => localStorage.removeItem(key));
   } catch {}
-  renderStats();
+  renderProfile();
+});
+
+// Switch player: deletes the profile AND its stats from this device.
+// (There is no account behind a profile, so there is nothing to log back in to.)
+switchBtn.addEventListener('click', () => {
+  if (!window.confirm('Switch player? This deletes your name, avatar, stats and best times from this device.')) return;
+  try {
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith('playoff-') && key !== 'playoff-muted') // keep the sound setting
+      .forEach((key) => localStorage.removeItem(key));
+  } catch {}
+  clearSession();
+  myProfile = null;
+  openSetup('new');
 });
 
 // ============================================================
@@ -393,38 +556,37 @@ function syncClock(done) {
 }
 
 // ============================================================
-// Home
+// Home: create, practice, join
 // ============================================================
 // Called when the server says "you are in a room".
-function onEntered(res, name) {
-  if (name && name.trim()) saveName(name);
+function onEntered(res) {
   myId = res.playerId;
   saveSession(res.room.code, res.secret);
   enterRoom(res.room);
 }
 
 function join() {
-  const name = nameInput.value;
-  socket.emit('room:join', { name, code: codeInput.value }, (res) => {
+  if (!myProfile) return goHome();
+  socket.emit('room:join', { name: myProfile.name, code: codeInput.value }, (res) => {
     if (!res.ok) return showError(res.error);
-    onEntered(res, name);
+    onEntered(res);
   });
 }
 
 createBtn.addEventListener('click', () => {
-  const name = nameInput.value;
-  socket.emit('room:create', { name }, (res) => {
+  if (!myProfile) return goHome();
+  socket.emit('room:create', { name: myProfile.name }, (res) => {
     if (!res.ok) return showError(res.error);
-    onEntered(res, name);
+    onEntered(res);
   });
 });
 
-// Practice: a private room just for you. The nickname is optional.
+// Practice: a private room just for you.
 practiceBtn.addEventListener('click', () => {
-  const typed = nameInput.value.trim();
-  socket.emit('room:create', { name: typed || 'Player', practice: true }, (res) => {
+  if (!myProfile) return goHome();
+  socket.emit('room:create', { name: myProfile.name, practice: true }, (res) => {
     if (!res.ok) return showError(res.error);
-    onEntered(res, typed);
+    onEntered(res);
   });
 });
 
@@ -515,7 +677,7 @@ function leaveRoom() {
   myId = null;
   clearInterval(countdownTimer);
   stopTicker();
-  showScreen('home');
+  goHome();
 }
 leaveBtn.addEventListener('click', leaveRoom);
 homeBtn.addEventListener('click', leaveRoom);
@@ -1085,7 +1247,7 @@ function tryRejoin() {
       myId = null;
       clearInterval(countdownTimer);
       stopTicker();
-      showScreen('home');
+      goHome();
       showError(res.error);
       return;
     }
@@ -1112,14 +1274,14 @@ socket.on('connect_error', () => {
 // ============================================================
 // On page load
 // ============================================================
-nameInput.value = loadName();
+buildAvatarGrid();
+myProfile = loadProfile(); // a saved profile means we skip straight to the home screen
 
 // An invite link looks like /?code=K7Q2X9. Fill the code in automatically.
 const inviteCode = new URLSearchParams(location.search).get('code');
-if (inviteCode) {
-  codeInput.value = inviteCode.toUpperCase().slice(0, 6);
-  if (!nameInput.value) nameInput.focus();
-}
+if (inviteCode) codeInput.value = inviteCode.toUpperCase().slice(0, 6);
+
+goHome(); // shows the home screen, or the welcome screen for a new player
 
 // Until the server answers, show a friendly note. (A free server can take a while to wake up.)
 setBanner('Connecting… the free server can take up to a minute to wake up.');

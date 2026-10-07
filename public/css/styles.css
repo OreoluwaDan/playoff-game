@@ -380,3 +380,58 @@ button { font-family: inherit; cursor: pointer; }
 .history-row .meta { flex-basis: 100%; margin-left: 0; padding-left: 0; text-align: left; }
 .empty { padding: 12px 0; text-align: center; color: var(--muted); }
 .danger-link { color: var(--red); }
+
+/* ---------- Stage 8C: profile, avatars, welcome screen, help card ---------- */
+.pf-avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: none; border-radius: 50%;
+  box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.15);
+}
+
+.setup-title { margin-top: 8px; text-align: center; font-size: clamp(1.5rem, 6vw, 1.9rem); font-weight: 900; color: var(--green); }
+
+.avatar-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 8px; justify-items: center; margin-bottom: 8px;
+}
+.avatar-opt {
+  padding: 3px; border: 3px solid transparent; border-radius: 50%;
+  background: none; touch-action: manipulation;
+  transition: transform 0.1s;
+}
+.avatar-opt:active { transform: scale(0.92); }
+.avatar-opt.on { border-color: var(--green); }
+
+.home-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.profile-chip {
+  display: flex; align-items: center; gap: 10px; min-width: 0;
+  padding: 4px 14px 4px 4px;
+  font: inherit; font-weight: 900; color: var(--text);
+  background: #fff; border: 2px solid var(--border); border-radius: 999px;
+}
+.profile-chip span:last-child { max-width: 38vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-actions { display: flex; flex: none; }
+.help-btn { font-size: 1.25rem; font-weight: 900; }
+#home .mascot, #welcome .mascot { width: clamp(80px, 26vw, 110px); }
+
+.profile-top { margin: 4px 0 16px; text-align: center; }
+.profile-top .pf-avatar { margin: 0 auto 8px; }
+.profile-name { font-size: 1.5rem; font-weight: 900; overflow-wrap: anywhere; }
+.profile-since { font-size: 0.85rem; font-weight: 800; color: var(--muted); }
+
+.link-row { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+.modal {
+  position: fixed; inset: 0; z-index: 70;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px; background: rgba(0, 0, 0, 0.5);
+}
+.modal-card {
+  width: 100%; max-width: 420px; max-height: 90vh; overflow: auto;
+  padding: 20px; background: #fff; border-radius: 24px;
+  animation: screenIn 0.2s ease-out;
+}
+.modal-card h2 { margin-bottom: 14px; }
+.help-item { margin: 0 0 14px; }
+.help-item h3 { margin: 0 0 4px; font-size: 1rem; font-weight: 900; }
+.help-item p { margin: 0; font-size: 0.92rem; font-weight: 700; color: #777; }

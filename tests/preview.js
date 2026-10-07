@@ -8,3 +8,5 @@ for (const difficulty of DIFFICULTIES) {
     console.log(`${i + 1}. ${q.text} = ${q.answer}`);
   });
 }
+
+
