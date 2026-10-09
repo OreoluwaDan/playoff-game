@@ -5,7 +5,7 @@ const socket = io();
 const $ = (id) => document.getElementById(id);
 
 // ----- Screens: only one is visible at a time -----
-const SCREENS = ['welcome', 'home', 'lobby', 'countdown', 'game', 'results', 'profile'];
+const SCREENS = ['welcome', 'home', 'solo', 'lobby', 'countdown', 'game', 'results', 'profile'];
 function showScreen(name) {
   SCREENS.forEach((s) => { $(s).hidden = s !== name; });
 }
@@ -20,19 +20,21 @@ const avatarGrid = $('avatarGrid');
 const setupError = $('setupError');
 const setupBtn = $('setupBtn');
 
-// home
+// home and solo picker
 const profileBtn = $('profileBtn');
 const homeAvatar = $('homeAvatar');
 const homeGreeting = $('homeGreeting');
 const helpBtn = $('helpBtn');
 const createBtn = $('createBtn');
-const practiceBtn = $('practiceBtn');
+const soloBtn = $('soloBtn');
 const codeInput = $('codeInput');
 const joinBtn = $('joinBtn');
 const errorEl = $('error');
 const banner = $('banner');
 const help = $('help');
 const helpClose = $('helpClose');
+const soloBack = $('soloBack');
+const soloCards = document.querySelectorAll('.solo-card');
 
 // lobby
 const leaveBtn = $('leaveBtn');
@@ -44,8 +46,11 @@ const copyLinkBtn = $('copyLinkBtn');
 const playersLabel = $('playersLabel');
 const playerCount = $('playerCount');
 const playerListEl = $('playerList');
+const modeBlock = $('modeBlock');
 const practiceBest = $('practiceBest');
+const modeInfo = $('modeInfo');
 const difficultyTiles = $('difficultyTiles');
+const questionsLabel = $('questionsLabel');
 const countTiles = $('countTiles');
 const startBtn = $('startBtn');
 const lobbyHint = $('lobbyHint');
@@ -88,6 +93,7 @@ const profileSince = $('profileSince');
 const statGames = $('statGames');
 const statWins = $('statWins');
 const statRate = $('statRate');
+const taBest = $('taBest');
 const bestGrid = $('bestGrid');
 const recentList = $('recentList');
 const resetStatsBtn = $('resetStatsBtn');
@@ -137,10 +143,13 @@ let currentIndex = 0;
 let tipQuestion = -1;       // which question showed the skip tip (once per game)
 let timeoutMs = 45000;
 let skipPenaltyMs = 15000;
-let laneEls = new Map();    // player id -> pieces of that player's race lane
-let ghostReady = false;     // has the practice "PB" lane been set up for this game?
-let ghostBestMs = 0;        // the best time the ghost lane follows (0 = no ghost)
+let laneEls = new Map();    // player id -> that player's dot on the race track
+let ghostReady = false;     // has the practice "PB" dot been set up for this game?
+let ghostBestMs = 0;        // the best time the ghost dot follows (0 = no ghost)
 let ghostDot = null;        // the practice "PB" dot on the race track
+let gameMode = 'race';      // 'race' or 'timeattack'
+let endAtLocal = 0;         // Time Attack: when the 60 seconds end, on THIS device's clock
+let taTotalMs = 60000;      // Time Attack: how long the whole run lasts
 let setupMode = 'new';      // 'new' (first visit) or 'edit' (changing the profile)
 let setupAvatar = 0;        // the avatar chosen on the setup screen
 
@@ -220,9 +229,10 @@ function setBanner(text) {
   banner.textContent = text || '';
   banner.hidden = !text;
   // No point letting people press these while there is no connection.
-  createBtn.disabled = !socket.connected;
-  practiceBtn.disabled = !socket.connected;
-  joinBtn.disabled = !socket.connected;
+  const offline = !socket.connected;
+  createBtn.disabled = offline;
+  joinBtn.disabled = offline;
+  soloCards.forEach((card) => { card.disabled = offline; });
 }
 
 // Old-style copy, used when the modern clipboard is blocked (it is on plain http pages).
@@ -371,10 +381,11 @@ help.addEventListener('click', (e) => { if (e.target === help) closeHelp(); }); 
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !help.hidden) closeHelp(); });
 
 // ============================================================
-// Stats: best times, totals and game history (all saved on THIS device)
+// Stats: best times, best scores, totals and game history (all saved on THIS device)
 // ============================================================
 const HISTORY_KEY = 'playoff-history';
 const TOTALS_KEY = 'playoff-totals';
+const TA_PREFIX = 'playoff-ta-best-';
 const MAX_HISTORY = 50;
 const DIFFICULTY_LIST = ['easy', 'medium', 'hard'];
 const COUNT_LIST = [5, 10, 15, 20];
@@ -386,6 +397,14 @@ function getBest(difficulty, count) {
 }
 function setBest(difficulty, count, ms) {
   try { localStorage.setItem(bestKey(difficulty, count), String(ms)); } catch {}
+}
+
+// Time Attack: the best score (number of correct answers) for each difficulty.
+function getTABest(difficulty) {
+  try { return Number(localStorage.getItem(TA_PREFIX + difficulty)) || null; } catch { return null; }
+}
+function setTABest(difficulty, score) {
+  try { localStorage.setItem(TA_PREFIX + difficulty, String(score)); } catch {}
 }
 
 // Saves one finished game. Returns false if this exact game was already saved
@@ -434,6 +453,22 @@ function renderProfile() {
   statWins.textContent = totals.wins;
   statRate.textContent = totals.versus ? `${Math.round((totals.wins / totals.versus) * 100)}%` : '–';
 
+  // Time Attack best scores: one for each difficulty.
+  taBest.innerHTML = '';
+  DIFFICULTY_LIST.forEach((difficulty) => {
+    const best = getTABest(difficulty);
+    const cell = document.createElement('div');
+    cell.className = 'stat';
+    const num = document.createElement('div');
+    num.className = 'stat-num';
+    num.textContent = best ? best : '–';
+    const label = document.createElement('div');
+    label.className = 'stat-label';
+    label.textContent = capitalize(difficulty);
+    cell.append(num, label);
+    taBest.append(cell);
+  });
+
   // Best times grid: a row for each difficulty, a column for each question count.
   bestGrid.innerHTML = '';
   const addCell = (text, className) => {
@@ -468,6 +503,7 @@ function renderProfile() {
 
     let label;
     if (g.mode === 'versus') label = g.finished ? `${ordinal(g.rank)} of ${g.players}` : 'Did not finish';
+    else if (g.mode === 'timeattack') label = 'Time Attack';
     else label = (g.mode === 'practice' ? 'Practice' : 'Solo') + (g.finished ? '' : ' · unfinished');
 
     const name = document.createElement('span');
@@ -477,8 +513,9 @@ function renderProfile() {
     const date = new Date(g.t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
     const meta = document.createElement('span');
     meta.className = 'meta';
-    meta.textContent =
-      `${capitalize(g.difficulty)} · ${g.count} questions · ${g.finished && g.totalMs ? formatTime(g.totalMs) : '–'} · ${date}`;
+    meta.textContent = g.mode === 'timeattack'
+      ? `${capitalize(g.difficulty)} · ${g.score} correct · ${date}`
+      : `${capitalize(g.difficulty)} · ${g.count} questions · ${g.finished && g.totalMs ? formatTime(g.totalMs) : '–'} · ${date}`;
 
     li.append(name, meta);
     recentList.append(li);
@@ -499,14 +536,14 @@ profileBtn.addEventListener('click', () => { renderProfile(); showScreen('profil
 profileBack.addEventListener('click', goHome);
 profileEditBtn.addEventListener('click', () => openSetup('edit'));
 
-// Reset stats: keeps your profile, deletes games and best times.
+// Reset stats: keeps your profile, deletes games, best times and best scores.
 resetStatsBtn.addEventListener('click', () => {
-  if (!window.confirm('Delete your game history and best times? Your profile is kept.')) return;
+  if (!window.confirm('Delete your game history, best times and best scores? Your profile is kept.')) return;
   try {
     localStorage.removeItem(HISTORY_KEY);
     localStorage.removeItem(TOTALS_KEY);
     Object.keys(localStorage)
-      .filter((key) => key.startsWith('playoff-best-'))
+      .filter((key) => key.startsWith('playoff-best-') || key.startsWith(TA_PREFIX))
       .forEach((key) => localStorage.removeItem(key));
   } catch {}
   renderProfile();
@@ -555,7 +592,7 @@ function syncClock(done) {
 }
 
 // ============================================================
-// Home: create, practice, join
+// Home: play with friends, play alone, join
 // ============================================================
 // Called when the server says "you are in a room".
 function onEntered(res) {
@@ -572,6 +609,7 @@ function join() {
   });
 }
 
+// "Play with friends": make a room. The host picks the mode in the lobby.
 createBtn.addEventListener('click', () => {
   if (!myProfile) return goHome();
   socket.emit('room:create', { name: myProfile.name }, (res) => {
@@ -580,12 +618,19 @@ createBtn.addEventListener('click', () => {
   });
 });
 
-// Practice: a private room just for you.
-practiceBtn.addEventListener('click', () => {
-  if (!myProfile) return goHome();
-  socket.emit('room:create', { name: myProfile.name, practice: true }, (res) => {
-    if (!res.ok) return showError(res.error);
-    onEntered(res);
+// "Play alone": open the picker with the solo modes.
+soloBtn.addEventListener('click', () => { showError(''); showScreen('solo'); });
+soloBack.addEventListener('click', goHome);
+
+// A solo card was tapped: make a private room for that mode.
+soloCards.forEach((card) => {
+  card.addEventListener('click', () => {
+    if (!myProfile) return goHome();
+    const mode = card.dataset.mode === 'timeattack' ? 'timeattack' : 'race';
+    socket.emit('room:create', { name: myProfile.name, practice: true, mode }, (res) => {
+      if (!res.ok) { goHome(); return showError(res.error); }
+      onEntered(res);
+    });
   });
 });
 
@@ -606,13 +651,23 @@ function setTiles(container, value, enabled) {
 function renderRoom(room) {
   currentRoom = room;
   const practice = !!room.practice;
+  const ta = (room.mode || 'race') === 'timeattack';
 
-  // A practice room has no code and no other players, so hide those parts.
-  lobbyTitle.textContent = practice ? 'Practice' : 'Waiting room';
+  // A solo room has no code, no other players and no mode choice, so hide those parts.
+  lobbyTitle.textContent = ta ? 'Time Attack' : practice ? 'Practice' : 'Waiting room';
   codeCard.hidden = practice;
   playersLabel.hidden = practice;
   playerListEl.hidden = practice;
-  startBtn.textContent = practice ? 'Start practice' : 'Start game';
+  modeBlock.hidden = practice;
+  questionsLabel.hidden = ta;   // Time Attack has no fixed number of questions
+  countTiles.hidden = ta;
+  startBtn.textContent = ta ? 'Start Time Attack' : practice ? 'Start practice' : 'Start game';
+
+  modeInfo.textContent = ta
+    ? 'You have 60 seconds. Every right answer is a point, wrong answers cost nothing, and you get one free skip.'
+    : practice
+      ? 'Race your own best time. A grey dot shows your best pace.'
+      : 'Everyone gets the same questions. Fastest total time wins. A skip adds 15 seconds.';
 
   roomCodeEl.textContent = room.code;
   playerCount.textContent = `· ${room.players.length}`;
@@ -643,8 +698,14 @@ function renderRoom(room) {
     playerListEl.append(li);
   });
 
-  // In practice, show your best time for the chosen setting.
-  if (practice) {
+  // In solo rooms, show your best for the chosen setting.
+  if (ta) {
+    const best = getTABest(room.settings.difficulty);
+    practiceBest.textContent = best
+      ? `Your best on ${room.settings.difficulty}: ${best} correct`
+      : `No best score on ${room.settings.difficulty} yet`;
+    practiceBest.hidden = false;
+  } else if (practice) {
     const best = getBest(room.settings.difficulty, room.settings.questionCount);
     practiceBest.textContent = best
       ? `Your best on this setting: ${formatTime(best)}`
@@ -727,25 +788,27 @@ function resetGameUI() {
   ghostDot = null;
   raceTrack.querySelectorAll('.race-dot').forEach((d) => d.remove());
   progressFill.style.width = '0%';
+  progressFill.classList.remove('low');
   timerEl.textContent = '0:00.0';
   feedback.textContent = '';
   hintLine.hidden = true;
   answerInput.hidden = false;
   answerInput.readOnly = false;
   skipBtn.hidden = false;
+  skipBtn.disabled = false;
   finishedMsg.hidden = true;
 }
 
-
-socket.on('game:countdown', ({ startAt }) => {
+socket.on('game:countdown', ({ startAt, mode }) => {
   resetGameUI();
   showScreen('countdown');
   // startAt is on the SERVER's clock. Convert it to this device's clock.
   goAtLocal = startAt - clockOffset;
 
   if (currentRoom) {
-    countInfo.textContent =
-      `${currentRoom.settings.questionCount} questions · ${capitalize(currentRoom.settings.difficulty)}`;
+    countInfo.textContent = mode === 'timeattack'
+      ? `60 seconds · ${capitalize(currentRoom.settings.difficulty)}`
+      : `${currentRoom.settings.questionCount} questions · ${capitalize(currentRoom.settings.difficulty)}`;
   }
 
   const ring = countNumber.parentElement;
@@ -789,9 +852,25 @@ function stopTicker() {
   gameTicker = null;
 }
 
-// Runs 10 times a second: updates the timer, the ghost lane and the "stuck" hints.
+// Runs 10 times a second: updates the timer, the ghost dot and the hints.
 function tickGame() {
   if (finished) return;
+
+  // ----- Time Attack: count DOWN from 60 seconds -----
+  if (gameMode === 'timeattack') {
+    const remaining = Math.max(0, endAtLocal - Date.now());
+    timerEl.textContent = formatTime(remaining);
+    progressFill.style.width = `${Math.min(100, (remaining / taTotalMs) * 100)}%`;
+    progressFill.classList.toggle('low', remaining <= 10000); // turns orange for the last 10 seconds
+    if (remaining <= 0 && !answerInput.readOnly) {
+      // The server ends the game itself. Until its results arrive, stop taking answers.
+      answerInput.readOnly = true;
+      feedback.textContent = 'Time is up!';
+    }
+    return;
+  }
+
+  // ----- Classic Race and Practice: count UP -----
   const runMs = Math.max(0, Date.now() - goAtLocal);
   timerEl.textContent = formatTime(runMs + penaltyMs);
 
@@ -825,13 +904,13 @@ function showPenaltyPop(ms) {
   penPop.classList.add('show');
 }
 
-// In practice with a saved best time, add a grey "PB" lane that follows that pace.
+// In practice with a saved best time, add a grey "PB" dot that follows that pace.
 function setupGhost() {
   ghostReady = true;
   ghostBestMs = 0;
   ghostDot = null;
   raceTrack.querySelectorAll('.race-dot.ghost').forEach((d) => d.remove());
-  if (!currentRoom || !currentRoom.practice) return;
+  if (!currentRoom || !currentRoom.practice || currentRoom.mode === 'timeattack') return;
 
   const best = getBest(currentRoom.settings.difficulty, currentRoom.settings.questionCount);
   if (!best) return;
@@ -849,6 +928,10 @@ function showQuestion(q, message) {
   clearInterval(countdownTimer);
   clearInterval(lockTimer);
   showScreen('game');
+
+  gameMode = q.mode || 'race';
+  const ta = gameMode === 'timeattack';
+  raceTrack.hidden = ta; // a solo Time Attack run has nobody to race on the track
   if (!ghostReady) setupGhost();
 
   expectedDigits = q.digits;
@@ -858,18 +941,34 @@ function showQuestion(q, message) {
   questionShownAt = Date.now() - (q.elapsedMs || 0); // right even if we just came back
   penaltyMs = q.penaltyMs || 0;                      // the server's penalty total
   goAtLocal = q.startAt - clockOffset;
+  if (ta) {
+    endAtLocal = q.endAt - clockOffset;
+    taTotalMs = q.endAt - q.startAt;
+  }
 
   answerInput.hidden = false;
   answerInput.readOnly = false;
   skipBtn.hidden = false;
   finishedMsg.hidden = true;
   hintLine.hidden = true;
-  skipPen.textContent = `+${skipPenaltyMs / 1000}s`;
+
+  if (ta) {
+    // One free skip for the whole run.
+    skipPen.textContent = q.skipsLeft ? 'free · 1 left' : 'used';
+    skipPen.classList.add('free');
+    skipBtn.disabled = !q.skipsLeft;
+    qProgress.textContent = `Score: ${q.score}`;
+  } else {
+    skipPen.textContent = `+${skipPenaltyMs / 1000}s`;
+    skipPen.classList.remove('free');
+    skipBtn.disabled = false;
+    qProgress.textContent = `Question ${q.index + 1} of ${q.total}`;
+    progressFill.classList.remove('low');
+    progressFill.style.width = `${(q.index / q.total) * 100}%`;
+  }
 
   answerInput.maxLength = q.digits; // the box stops accepting digits at the right length
-  qProgress.textContent = `Question ${q.index + 1} of ${q.total}`;
   questionText.textContent = q.text;
-  progressFill.style.width = `${(q.index / q.total) * 100}%`;
   feedback.textContent = message || '';
   answerInput.value = '';
   answerInput.focus();
@@ -880,7 +979,7 @@ function showFinished() {
   finished = true;
   stopTicker();
   clearInterval(lockTimer);
-  progressFill.style.width = '100%';
+  if (gameMode !== 'timeattack') progressFill.style.width = '100%';
   answerInput.hidden = true;
   skipBtn.hidden = true;
   hintLine.hidden = true;
@@ -960,12 +1059,12 @@ function submitAnswer() {
 }
 
 function submitSkip() {
-  if (busy || finished || !socket.connected) return;
+  if (busy || finished || skipBtn.disabled || !socket.connected) return;
   busy = true;
   socket.emit('game:skip', {}, (res) => {
     busy = false;
     if (!res.ok) { feedback.textContent = res.error; return; }
-    showPenaltyPop(res.penaltyMs);
+    if (res.penaltyMs) showPenaltyPop(res.penaltyMs); // a Time Attack skip is free
     Sound.skip();
     if (res.finished) showFinished();
     else showQuestion(res.question);
@@ -980,7 +1079,7 @@ answerInput.addEventListener('input', () => {
   submitAnswer();
 });
 
-// ----- Race lanes: everyone's progress, live -----
+// ----- Race track: everyone's progress, live -----
 function renderLanes(players, total) {
   const same = players.length === laneEls.size && players.every((p) => laneEls.has(p.id));
 
@@ -1085,12 +1184,14 @@ function confetti() {
   setTimeout(() => layer.remove(), 5000);
 }
 
-socket.on('game:results', ({ players, total, gameId }) => {
+socket.on('game:results', ({ players, total, gameId, mode, durationMs }) => {
   clearInterval(countdownTimer);
+  clearInterval(lockTimer);
   stopTicker();
 
   const me = players.find((p) => p.id === myId);
   const room = currentRoom;
+  const ta = mode === 'timeattack';
   const practice = !!(room && room.practice);
   const versus = !practice && players.length >= 2;
 
@@ -1100,13 +1201,14 @@ socket.on('game:results', ({ players, total, gameId }) => {
     fresh = recordGame({
       id: `${room.code}-${gameId || Date.now()}-${myId}`,
       t: Date.now(),
-      mode: practice ? 'practice' : versus ? 'versus' : 'solo',
+      mode: ta ? 'timeattack' : practice ? 'practice' : versus ? 'versus' : 'solo',
       difficulty: room.settings.difficulty,
-      count: total,
+      count: ta ? 0 : total,
       players: players.length,
       rank: me.rank,
       finished: me.finished,
       totalMs: me.totalMs,
+      score: ta ? me.score : null,
       wrongs: me.wrongs,
       skips: me.skips,
       won: versus && me.finished && me.rank === 1,
@@ -1116,7 +1218,27 @@ socket.on('game:results', ({ players, total, gameId }) => {
   // 2) Compare with your personal best on this setting.
   let newBest = false;
   bestLine.hidden = true;
-  if (me && me.finished && room) {
+  if (me && room && ta) {
+    const { difficulty } = room.settings;
+    const previous = getTABest(difficulty);
+
+    if (me.score <= 0) {
+      bestLine.textContent = 'Score a point to set your first best';
+    } else if (previous === null) {
+      setTABest(difficulty, me.score);
+      newBest = true;
+      bestLine.textContent = 'Saved as your best score on this difficulty';
+    } else if (me.score > previous) {
+      setTABest(difficulty, me.score);
+      newBest = true;
+      bestLine.textContent = `New best score! ${me.score - previous} more than before`;
+    } else if (me.score === previous) {
+      bestLine.textContent = 'You matched your best score';
+    } else {
+      bestLine.textContent = `${previous - me.score} short of your best (${previous})`;
+    }
+    bestLine.hidden = false;
+  } else if (me && me.finished && room) {
     const { difficulty } = room.settings;
     const previous = getBest(difficulty, total);
 
@@ -1138,59 +1260,69 @@ socket.on('game:results', ({ players, total, gameId }) => {
 
   // 3) Title and subtitle.
   if (me) {
-    if (!me.finished) resultTitle.textContent = 'Time is up';
-    else if (practice) resultTitle.textContent = newBest ? 'New best!' : 'Done!';
-    else if (players.length === 1) resultTitle.textContent = 'Finished!';
-    else if (me.rank === 1) resultTitle.textContent = 'You won!';
-    else resultTitle.textContent = `${ordinal(me.rank)} place`;
+    if (ta) {
+      resultTitle.textContent = newBest ? 'New best!' : 'Time!';
+      resultSub.textContent = `${me.score} correct in ${Math.round((durationMs || 60000) / 1000)} seconds`;
+    } else {
+      if (!me.finished) resultTitle.textContent = 'Time is up';
+      else if (practice) resultTitle.textContent = newBest ? 'New best!' : 'Done!';
+      else if (players.length === 1) resultTitle.textContent = 'Finished!';
+      else if (me.rank === 1) resultTitle.textContent = 'You won!';
+      else resultTitle.textContent = `${ordinal(me.rank)} place`;
 
-    resultSub.textContent = me.finished
-      ? `${total} of ${total} · ${formatTime(me.totalMs)}`
-      : `${me.completed} of ${total} answered`;
+      resultSub.textContent = me.finished
+        ? `${total} of ${total} · ${formatTime(me.totalMs)}`
+        : `${me.completed} of ${total} answered`;
+    }
   }
 
-  // 4) Podium and ranking (not needed when you are alone in practice).
+  // 4) Podium and ranking (not needed when you are alone).
   podium.hidden = practice;
   resultList.hidden = practice;
-  if (!practice) renderPodium(players);
-
   resultList.innerHTML = '';
-  players.forEach((p) => {
-    const li = document.createElement('li');
-    li.className = 'player';
+  if (!practice) {
+    renderPodium(players);
+    players.forEach((p) => {
+      const li = document.createElement('li');
+      li.className = 'player';
 
-    const rank = document.createElement('span');
-    rank.className = 'rank-num';
-    rank.textContent = p.rank;
+      const rank = document.createElement('span');
+      rank.className = 'rank-num';
+      rank.textContent = p.rank;
 
-    const name = document.createElement('span');
-    name.className = 'name';
-    name.textContent = p.name + (p.id === myId ? ' (you)' : '');
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = p.name + (p.id === myId ? ' (you)' : '');
 
-    const meta = document.createElement('span');
-    meta.className = 'meta';
-    meta.textContent = p.finished
-      ? `${formatTime(p.totalMs)} · ${p.wrongs} wrong · ${p.skips} skipped`
-      : `${p.left ? 'left' : 'did not finish'} (${p.completed}/${total})`;
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      meta.textContent = p.finished
+        ? `${formatTime(p.totalMs)} · ${p.wrongs} wrong · ${p.skips} skipped`
+        : `${p.left ? 'left' : 'did not finish'} (${p.completed}/${total})`;
 
-    li.append(rank, makeAvatar(p), name, meta);
-    resultList.append(li);
-  });
+      li.append(rank, makeAvatar(p), name, meta);
+      resultList.append(li);
+    });
+  }
 
   renderChart(me);
 
   const isHost = room && room.hostId === myId;
   rematchBtn.textContent = practice ? 'Play again' : 'Rematch';
+  homeBtn.textContent = practice ? 'Back to home' : 'Leave room';
   rematchBtn.hidden = !isHost;
   rematchHint.hidden = isHost;
   showScreen('results');
 
   // 5) Celebrate (only the first time we see these results, not after a refresh).
-  const celebrate = fresh && me && me.finished && ((practice && newBest) || (versus && me.rank === 1));
+  const celebrate = fresh && me && (
+    (ta && newBest) ||
+    (!ta && me.finished && ((practice && newBest) || (versus && me.rank === 1)))
+  );
   setTimeout(() => {
     if ($('results').hidden) return; // they already left the results screen
     if (celebrate) { Sound.win(); confetti(); }
-    else if (fresh && me && me.finished) Sound.finish();
+    else if (fresh && me && (ta || me.finished)) Sound.finish();
   }, practice ? 300 : 900);
 });
 
@@ -1247,4 +1379,4 @@ if (inviteCode) codeInput.value = inviteCode.toUpperCase().slice(0, 6);
 goHome(); // shows the home screen, or the welcome screen for a new player
 
 // Until the server answers, show a friendly note. (A free server can take a while to wake up.)
-setBanner('Connecting… the free server can take up to a minute to wake up.');  
+setBanner('Connecting… the free server can take up to a minute to wake up.');

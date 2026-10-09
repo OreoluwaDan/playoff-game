@@ -472,3 +472,30 @@ button { font-family: inherit; cursor: pointer; }
   .question-card { margin-bottom: 12px; padding: 10px 8px 14px; }
   .question { font-size: clamp(2rem, 9vw, 2.8rem); }
 }
+
+/* ---------- Stage 10B: mode cards and Time Attack ---------- */
+.mode-card {
+  display: block; width: 100%; margin: 0 0 12px; padding: 14px;
+  text-align: left; font: inherit; color: var(--text);
+  background: #fff; border: 2px solid var(--border); border-radius: 18px;
+  box-shadow: 0 4px 0 var(--border);
+  transition: transform 0.08s, box-shadow 0.08s;
+  touch-action: manipulation;
+}
+.mode-card:not(:disabled):active { transform: translateY(3px); box-shadow: 0 1px 0 var(--border); }
+.mode-card.on { background: #ddf4ff; border-color: #84d8ff; box-shadow: 0 4px 0 #84d8ff; }
+.mode-card:disabled { opacity: 0.55; cursor: default; }
+.mode-title { display: block; font-size: 1.1rem; font-weight: 900; }
+.mode-desc { display: block; margin-top: 2px; font-size: 0.88rem; font-weight: 700; color: #777; }
+.soon {
+  margin-left: 8px; padding: 1px 8px; border-radius: 8px; vertical-align: middle;
+  background: #f0f0f0; color: var(--muted);
+  font-size: 0.7rem; font-weight: 900; letter-spacing: 0.05em; text-transform: uppercase;
+}
+.mode-info {
+  margin: 12px 0 0; padding: 10px 12px; border-radius: 12px;
+  background: #f7f7f7; font-size: 0.85rem; font-weight: 700; color: #777;
+}
+.tagline.left { margin: 0 0 14px; text-align: left; }
+.progress-fill.low { background: var(--orange); }
+.pen.free { background: #e6f7d4; color: var(--green-d); }

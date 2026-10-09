@@ -69,8 +69,8 @@
       <h1 class="brand">PlayOff</h1>
       <p class="tagline">Race your friends. Fast maths.</p>
 
-      <button id="createBtn" class="btn btn-green">Create room</button>
-      <button id="practiceBtn" class="btn btn-ghost">Practice alone</button>
+      <button id="createBtn" class="btn btn-green">Play with friends</button>
+      <button id="soloBtn" class="btn btn-ghost">Play alone</button>
 
       <p class="divider">or join a friend</p>
 
@@ -81,6 +81,25 @@
       </div>
 
       <p id="error" class="error" role="alert"></p>
+    </section>
+
+    <!-- SCREEN: play alone (pick a solo mode) -->
+    <section id="solo" class="screen" hidden>
+      <header class="screen-head">
+        <button id="soloBack" class="icon-btn" aria-label="Back">&larr;</button>
+        <h2>Play alone</h2>
+        <span class="icon-btn" aria-hidden="true"></span>
+      </header>
+      <p class="tagline left">Pick a mode.</p>
+
+      <button class="mode-card solo-card" data-mode="practice">
+        <span class="mode-title">Practice</span>
+        <span class="mode-desc">Race your own best time. Choose how many questions, and a grey dot shows your best pace.</span>
+      </button>
+      <button class="mode-card solo-card" data-mode="timeattack">
+        <span class="mode-title">Time Attack</span>
+        <span class="mode-desc">60 seconds on the clock. Every right answer is a point. Wrong answers cost nothing, and you get one free skip.</span>
+      </button>
     </section>
 
     <!-- SCREEN: lobby -->
@@ -103,7 +122,22 @@
       <p id="playersLabel" class="label">PLAYERS <span id="playerCount"></span></p>
       <ul id="playerList" class="player-list"></ul>
 
+      <div id="modeBlock">
+        <p class="label">GAME MODE</p>
+        <div class="mode-cards">
+          <button class="mode-card on" data-mode="race" aria-pressed="true">
+            <span class="mode-title">Classic Race</span>
+            <span class="mode-desc">Same questions for everyone. Fastest total time wins.</span>
+          </button>
+          <button class="mode-card" data-mode="duel" disabled>
+            <span class="mode-title">Duel <span class="soon">Coming soon</span></span>
+            <span class="mode-desc">One question at a time. First correct answer takes the point.</span>
+          </button>
+        </div>
+      </div>
+
       <p id="practiceBest" class="best-line" hidden></p>
+      <p id="modeInfo" class="mode-info"></p>
 
       <p class="label">DIFFICULTY</p>
       <div id="difficultyTiles" class="tiles">
@@ -112,7 +146,7 @@
         <button class="tile" data-value="hard">Hard</button>
       </div>
 
-      <p class="label">QUESTIONS</p>
+      <p id="questionsLabel" class="label">QUESTIONS</p>
       <div id="countTiles" class="tiles">
         <button class="tile" data-value="5">5</button>
         <button class="tile" data-value="10">10</button>
@@ -133,7 +167,7 @@
 
     <!-- SCREEN: game -->
     <section id="game" class="screen" hidden>
-        <div class="game-head">
+      <div class="game-head">
         <div class="topbar">
           <div class="progress"><div id="progressFill" class="progress-fill"></div></div>
           <div class="timer-wrap">
@@ -204,6 +238,9 @@
         <div class="stat"><div id="statRate" class="stat-num">–</div><div class="stat-label">Win rate</div></div>
       </div>
 
+      <p class="label">TIME ATTACK BEST SCORE</p>
+      <div id="taBest" class="stat-row"></div>
+
       <p class="label">BEST TIMES</p>
       <div id="bestGrid" class="best-grid"></div>
 
@@ -224,16 +261,20 @@
     <div class="modal-card">
       <h2 id="helpTitle">How to play</h2>
       <div class="help-item">
-        <h3>Race with friends</h3>
+        <h3>Classic Race</h3>
         <p>Everyone gets the same questions and races at their own speed. Type the answer and it checks itself. Get it right to move on. The fastest total time wins.</p>
       </div>
       <div class="help-item">
-        <h3>Skipping</h3>
+        <h3>Skipping in a race</h3>
         <p>Stuck? Skip moves you on but adds 15 seconds to your time. If you stay on one question for 45 seconds, it skips for you.</p>
       </div>
       <div class="help-item">
-        <h3>Practice alone</h3>
-        <p>Play by yourself and race your own best time. A grey lane shows your best pace.</p>
+        <h3>Practice</h3>
+        <p>Play by yourself and race your own best time. A grey dot shows your best pace.</p>
+      </div>
+      <div class="help-item">
+        <h3>Time Attack</h3>
+        <p>You have 60 seconds. Every right answer is a point, wrong answers cost nothing, and you get one free skip. Beat your best score.</p>
       </div>
       <button id="helpClose" class="btn btn-green">Got it</button>
     </div>
