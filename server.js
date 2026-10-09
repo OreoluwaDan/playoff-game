@@ -71,7 +71,12 @@ io.on('connection', (socket) => {
       return callback({ ok: false, error: 'You are already in a room.' });
     }
 
-    const result = rooms.createRoom(socket.id, data && data.name, data && data.practice === true);
+    const result = rooms.createRoom(
+      socket.id,
+      data && data.name,
+      data && data.practice === true,
+      data && data.mode
+    );
     if (result.error) return callback({ ok: false, error: result.error });
 
     socket.join(result.room.code);

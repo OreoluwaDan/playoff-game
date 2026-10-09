@@ -62,7 +62,7 @@ function makePlayer(socketId, name, color) {
   };
 }
 
-function createRoom(socketId, name, practice) {
+function createRoom(socketId, name, practice, mode) {
   if (rooms.size >= MAX_ROOMS) return { error: 'The server is busy right now. Try again soon.' };
   const cleaned = cleanName(name);
   if (!cleaned) return { error: 'Please enter a nickname.' };
@@ -77,6 +77,7 @@ function createRoom(socketId, name, practice) {
     players: [player],
     game: null,
     practice: practice === true,
+    mode: practice === true && mode === 'timeattack' ? 'timeattack' : 'race',
   };
 
   rooms.set(code, room);
@@ -192,6 +193,7 @@ function publicState(room) {
     hostId: room.hostId,
     status: room.status,
     practice: room.practice,
+    mode: room.mode,
     settings: room.settings,
     players: room.players.map((p) => ({
       id: p.id,

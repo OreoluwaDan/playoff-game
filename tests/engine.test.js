@@ -205,3 +205,69 @@ test('results include a game id so the browser never saves one game twice', () =
     engine.stop(room);
   }
 });
+
+// A solo room set up for Time Attack.
+function makeTimeAttackRoom() {
+  const made = makeRoom(['Ada']);
+  made.room.practice = true;
+  made.room.mode = 'timeattack';
+  made.room.settings = { difficulty: 'easy', questionCount: 10 };
+  return made;
+}
+
+test('time attack prepares a long supply of questions and counts correct answers', () => {
+  const { room, net } = makeTimeAttackRoom();
+  try {
+    startNow(room, net);
+    assert.ok(room.game.questions.length >= 100);
+    for (let i = 0; i < 5; i++) answerCorrectly(room, net, 'p1');
+    assert.equal(room.game.players.get('p1').score, 5);
+  } finally {
+    engine.stop(room);
+  }
+});
+
+test('time attack gives exactly one free skip', () => {
+  const { room, net } = makeTimeAttackRoom();
+  try {
+    startNow(room, net);
+    const p = room.game.players.get('p1');
+
+    p.lastActionAt = 0;
+    const first = engine.submitSkip(room, net, 'p1');
+    assert.equal(first.ok, true);
+    assert.equal(first.penaltyMs, 0);
+    assert.equal(p.penaltyMs, 0);
+    assert.equal(p.index, 1);
+
+    p.lastActionAt = 0;
+    const second = engine.submitSkip(room, net, 'p1');
+    assert.equal(second.ok, false);
+    assert.equal(p.index, 1);
+  } finally {
+    engine.stop(room);
+  }
+});
+
+test('time attack: wrong answers cost nothing and the score is the result', () => {
+  const { room, net, events } = makeTimeAttackRoom();
+  try {
+    startNow(room, net);
+    const p = room.game.players.get('p1');
+    for (let i = 0; i < 3; i++) answerCorrectly(room, net, 'p1');
+
+    p.lastActionAt = 0;
+    const wrong = String(room.game.questions[p.index].answer + 1);
+    const res = engine.submitAnswer(room, net, 'p1', wrong);
+    assert.equal(res.correct, false);
+    assert.equal(p.penaltyMs, 0);
+
+    engine.playerLeft(room, net, 'p1'); // the only player leaves, so the game ends
+    const results = events.find((e) => e.e === 'game:results').payload;
+    assert.equal(results.mode, 'timeattack');
+    assert.equal(results.players[0].score, 3);
+    assert.equal(room.status, 'finished');
+  } finally {
+    engine.stop(room);
+  }
+});

@@ -1,23 +1,27 @@
 // game/engine.js
 // The referee. It owns the rules: countdown, checking answers, timing, penalties,
-// skip, auto-skip, the streak bonus and working out the winner.
+// skip, auto-skip, the streak bonus, Time Attack and working out the winner.
 //
 // It never talks to browsers directly. server.js hands it a small "net" helper:
 //   net.toPlayer(playerId, eventName, data)  -> message one player
 //   net.toRoom(roomCode, eventName, data)    -> message everyone in the room
 
-const { generateQuestions } = require('./questions');
+const { generateQuestions, generateStream } = require('./questions');
 
 // ----- The game rules. Change a number here to change the game. -----
 const COUNTDOWN_LEAD_MS = 4000;     // time between pressing Start and GO
-const SKIP_PENALTY_MS = 15000;      // +15 seconds for a skip or an auto-skip
-const QUESTION_TIMEOUT_MS = 45000;  // stuck on one question this long = auto-skip
-const GRACE_MS = 60000;             // after the first finisher, others get this long
+const SKIP_PENALTY_MS = 15000;      // +15 seconds for a skip or an auto-skip (Classic Race)
+const QUESTION_TIMEOUT_MS = 45000;  // stuck on one question this long = auto-skip (Classic Race)
+const GRACE_MS = 60000;             // after the first finisher, others get this long (Classic Race)
 const STREAK_NEEDED = 3;            // right first time this many in a row...
 const STREAK_BONUS_MS = 500;        // ...and each such answer after that takes off 0.5s
 const MIN_ACTION_GAP_MS = 150;      // ignore answers sent faster than this (anti-spam)
 const WRONG_RUN_LIMIT = 5;          // this many wrong answers in a row on one question...
 const WRONG_COOLDOWN_MS = 3000;     // ...locks the answer box for this long
+const TA_DURATION_MS = 60000;       // Time Attack lasts this long
+const TA_POOL_SIZE = 120;           // how many questions Time Attack prepares up front
+
+const isTimeAttack = (game) => game.mode === 'timeattack';
 
 // What a player is allowed to see about a question: NO answer in here.
 function questionPayload(game, player, reason) {
@@ -28,10 +32,14 @@ function questionPayload(game, player, reason) {
     text: q.text,
     // How many digits the answer has, so the browser knows when to check.
     digits: String(q.answer).length,
+    mode: game.mode,
     timeoutMs: QUESTION_TIMEOUT_MS,
-    skipPenaltyMs: SKIP_PENALTY_MS,
+    skipPenaltyMs: isTimeAttack(game) ? 0 : SKIP_PENALTY_MS,
     penaltyMs: player.penaltyMs,   // so a returning player's timer is right
     startAt: game.startAt,         // the GO moment, on the server's clock
+    endAt: game.endAt,             // Time Attack: when the 60 seconds are up (server clock)
+    score: player.score,
+    skipsLeft: isTimeAttack(game) ? (player.skipUsed ? 0 : 1) : null,
     elapsedMs: Math.max(0, Date.now() - player.questionStartedAt),
     reason: reason || null,
   };
@@ -47,11 +55,13 @@ function sendProgress(room, net) {
   if (!game) return;
   net.toRoom(room.code, 'game:progress', {
     total: game.questions.length,
+    mode: game.mode,
     players: [...game.players.values()].map((p) => ({
       id: p.id,
       name: p.name,
       color: p.color,
       done: p.index, // how many questions this player has got past
+      score: p.score,
       finished: p.finishedAt !== null,
       left: p.left,
       away: p.away,  // connection dropped, but they may still come back
@@ -63,11 +73,18 @@ function sendProgress(room, net) {
 
 function startGame(room, net) {
   const startAt = Date.now() + COUNTDOWN_LEAD_MS;
+  const timeAttack = room.mode === 'timeattack';
+
   const game = {
-    questions: generateQuestions(room.settings.difficulty, room.settings.questionCount),
+    mode: timeAttack ? 'timeattack' : 'race',
+    questions: timeAttack
+      ? generateStream(room.settings.difficulty, TA_POOL_SIZE)
+      : generateQuestions(room.settings.difficulty, room.settings.questionCount),
     startAt,
+    endAt: timeAttack ? startAt + TA_DURATION_MS : null,
     startTimer: null,
     graceTimer: null,
+    endTimer: null,
     over: false,
     resultsPayload: null,
     players: new Map(),
@@ -79,6 +96,8 @@ function startGame(room, net) {
       name: p.name,
       color: p.color,
       index: 0,              // which question they are on
+      score: 0,              // Time Attack: correct answers so far
+      skipUsed: false,       // Time Attack: the one free skip
       penaltyMs: 0,
       bonusMs: 0,
       wrongs: 0,
@@ -92,7 +111,7 @@ function startGame(room, net) {
       finishedAt: null,
       left: false,
       away: !p.connected,
-      timer: null,           // the auto-skip timer
+      timer: null,           // the auto-skip timer (Classic Race only)
       times: [],             // how long each question took
     });
   }
@@ -101,7 +120,7 @@ function startGame(room, net) {
   room.status = 'countdown';
 
   // Every player gets the same GO time (on the server's clock).
-  net.toRoom(room.code, 'game:countdown', { startAt, serverNow: Date.now() });
+  net.toRoom(room.code, 'game:countdown', { startAt, serverNow: Date.now(), mode: game.mode });
   game.startTimer = setTimeout(() => beginRace(room, net), startAt - Date.now());
 }
 
@@ -112,16 +131,21 @@ function beginRace(room, net) {
   clearTimeout(game.startTimer);
   room.status = 'playing';
 
+  // Time Attack: the server ends the game when the 60 seconds are up.
+  if (isTimeAttack(game)) {
+    game.endTimer = setTimeout(() => endGame(room, net), Math.max(0, game.endAt - Date.now()));
+  }
+
   for (const p of game.players.values()) {
     if (p.left) continue;
     p.questionStartedAt = game.startAt;
-    armTimer(room, net, p);
+    if (!isTimeAttack(game)) armTimer(room, net, p);
     net.toPlayer(p.id, 'game:question', questionPayload(game, p));
   }
   sendProgress(room, net);
 }
 
-// ---------- Auto-skip timer ----------
+// ---------- Auto-skip timer (Classic Race only) ----------
 
 function armTimer(room, net, p) {
   clearTimeout(p.timer);
@@ -151,11 +175,12 @@ function moveOn(room, net, p, now, reason) {
   }
 
   p.questionStartedAt = now;
-  armTimer(room, net, p);
+  if (!isTimeAttack(game)) armTimer(room, net, p);
   sendProgress(room, net);
   return { finished: false, question: questionPayload(game, p, reason) };
 }
 
+// A skip in Classic Race: costs 15 seconds.
 function takeSkip(room, net, p, reason) {
   const now = Date.now();
   p.skips++;
@@ -180,7 +205,9 @@ function submitAnswer(room, net, playerId, raw) {
   const p = getActivePlayer(room, playerId);
   if (!p) return { ok: false, error: 'You cannot answer right now.' };
 
+  const game = room.game;
   const now = Date.now();
+  if (isTimeAttack(game) && now >= game.endAt) return { ok: false, error: 'Time is up.' };
   if (now < p.lockedUntil) {
     return { ok: false, error: 'Too many wrong tries. Wait a moment.', cooldownMs: p.lockedUntil - now };
   }
@@ -193,7 +220,6 @@ function submitAnswer(room, net, playerId, raw) {
   const text = typeof raw === 'string' ? raw.trim() : '';
   if (!/^\d{1,9}$/.test(text)) return { ok: false, error: 'Type a number.' };
 
-  const game = room.game;
   const question = game.questions[p.index];
 
   if (Number(text) !== question.answer) {
@@ -210,23 +236,38 @@ function submitAnswer(room, net, playerId, raw) {
   }
 
   p.times.push({ ms: now - p.questionStartedAt, skipped: false });
-  if (!p.wrongOnCurrent) {
+  if (isTimeAttack(game)) {
+    p.score++; // every correct answer is a point
+  } else if (!p.wrongOnCurrent) {
     p.streak++; // right first time keeps the streak going
     if (p.streak >= STREAK_NEEDED) p.bonusMs += STREAK_BONUS_MS;
   }
   const out = moveOn(room, net, p, now);
-  return { ok: true, correct: true, ...out };
+  return { ok: true, correct: true, score: p.score, ...out };
 }
 
 function submitSkip(room, net, playerId) {
   const p = getActivePlayer(room, playerId);
   if (!p) return { ok: false, error: 'You cannot skip right now.' };
 
+  const game = room.game;
   const now = Date.now();
+  if (isTimeAttack(game) && now >= game.endAt) return { ok: false, error: 'Time is up.' };
   if (now - p.lastActionAt < MIN_ACTION_GAP_MS) {
     return { ok: false, error: 'Slow down a little.' };
   }
   p.lastActionAt = now;
+
+  // Time Attack: ONE free skip for the whole run.
+  if (isTimeAttack(game)) {
+    if (p.skipUsed) return { ok: false, error: 'You already used your skip.' };
+    p.skipUsed = true;
+    p.skips++;
+    p.streak = 0;
+    p.times.push({ ms: now - p.questionStartedAt, skipped: true });
+    const out = moveOn(room, net, p, now, 'skip');
+    return { ok: true, skipped: true, penaltyMs: 0, ...out };
+  }
 
   const out = takeSkip(room, net, p, 'skip');
   return { ok: true, skipped: true, penaltyMs: SKIP_PENALTY_MS, ...out };
@@ -239,8 +280,8 @@ function finishPlayer(room, net, p, now) {
   clearTimeout(p.timer);
   p.finishedAt = now;
 
-  // The first finisher starts a countdown for everyone still playing.
-  if (!game.graceTimer) {
+  // Classic Race: the first finisher starts a countdown for everyone still playing.
+  if (!isTimeAttack(game) && !game.graceTimer) {
     game.graceTimer = setTimeout(() => endGame(room, net), GRACE_MS);
   }
   endIfEveryoneDone(room, net);
@@ -259,9 +300,41 @@ function endGame(room, net) {
   game.over = true;
   clearTimeout(game.startTimer);
   clearTimeout(game.graceTimer);
+  clearTimeout(game.endTimer);
   for (const p of game.players.values()) clearTimeout(p.timer);
   room.status = 'finished';
 
+  // ----- Time Attack: the score is the number of correct answers -----
+  if (isTimeAttack(game)) {
+    const results = [...game.players.values()].map((p) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+      finished: true,
+      left: p.left,
+      score: p.score,
+      completed: p.times.length,
+      totalMs: null,
+      wrongs: p.wrongs,
+      skips: p.skips,
+      bonusMs: 0,
+      times: p.times,
+    }));
+    results.sort((a, b) => (b.score - a.score) || (a.wrongs - b.wrongs));
+    results.forEach((r, i) => { r.rank = i + 1; });
+
+    game.resultsPayload = {
+      mode: 'timeattack',
+      players: results,
+      total: 0,
+      durationMs: TA_DURATION_MS,
+      gameId: game.startAt,
+    };
+    net.toRoom(room.code, 'game:results', game.resultsPayload);
+    return;
+  }
+
+  // ----- Classic Race: the lowest total time wins -----
   const results = [...game.players.values()].map((p) => {
     const finished = p.finishedAt !== null;
     return {
@@ -289,7 +362,7 @@ function endGame(room, net) {
   results.forEach((r, i) => { r.rank = i + 1; });
 
   // Saved so a player who reconnects after the end can still see the results.
- game.resultsPayload = { players: results, total: game.questions.length, gameId: game.startAt };
+  game.resultsPayload = { mode: 'race', players: results, total: game.questions.length, gameId: game.startAt };
   net.toRoom(room.code, 'game:results', game.resultsPayload);
 }
 
@@ -311,7 +384,7 @@ function resync(room, net, playerId) {
   if (!game) return;
 
   if (room.status === 'countdown') {
-    net.toPlayer(playerId, 'game:countdown', { startAt: game.startAt, serverNow: Date.now() });
+    net.toPlayer(playerId, 'game:countdown', { startAt: game.startAt, serverNow: Date.now(), mode: game.mode });
   } else if (room.status === 'playing') {
     const p = game.players.get(playerId);
     if (!p || p.left) return;
@@ -341,6 +414,7 @@ function stop(room) {
   game.over = true;
   clearTimeout(game.startTimer);
   clearTimeout(game.graceTimer);
+  clearTimeout(game.endTimer);
   for (const p of game.players.values()) clearTimeout(p.timer);
 }
 
@@ -357,5 +431,3 @@ module.exports = {
   startGame, beginRace, submitAnswer, submitSkip,
   setAway, resync, playerLeft, stop, rematch,
 };
-
-

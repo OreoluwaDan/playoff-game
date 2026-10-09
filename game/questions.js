@@ -54,20 +54,16 @@ const hard = [
 
 const TYPES = { easy, medium, hard };
 
-// Makes the full list of questions for one game, the same list for every player.
-function generateQuestions(difficulty, count) {
-  if (!DIFFICULTIES.includes(difficulty)) throw new Error('Unknown difficulty');
-  if (!QUESTION_COUNTS.includes(count)) throw new Error('Unsupported question count');
-
+// The shared question builder. No question repeats, and no two of the same kind in a row.
+function build(difficulty, count) {
   const generators = TYPES[difficulty];
   const questions = [];
-  const seen = new Set(); // question texts we have used, so none repeat
+  const seen = new Set();
   let lastIndex = -1;
   let attempts = 0;
 
-  while (questions.length < count && attempts < 1000) {
+  while (questions.length < count && attempts < 5000) {
     attempts++;
-    // Avoid two questions of the same kind in a row, so it feels varied.
     const index = randomInt(generators.length);
     if (index === lastIndex) continue;
 
@@ -81,9 +77,23 @@ function generateQuestions(difficulty, count) {
   return questions;
 }
 
+// A normal game: the host picks 5, 10, 15 or 20 questions.
+function generateQuestions(difficulty, count) {
+  if (!DIFFICULTIES.includes(difficulty)) throw new Error('Unknown difficulty');
+  if (!QUESTION_COUNTS.includes(count)) throw new Error('Unsupported question count');
+  return build(difficulty, count);
+}
+
+// Time Attack: a long supply of questions, so nobody can run out in 60 seconds.
+function generateStream(difficulty, count) {
+  if (!DIFFICULTIES.includes(difficulty)) throw new Error('Unknown difficulty');
+  if (!Number.isInteger(count) || count < 1 || count > 200) throw new Error('Unsupported question count');
+  return build(difficulty, count);
+}
+
 // The version of a question that is safe to send to a browser: NO answer.
 function publicQuestion(q) {
   return { id: q.id, text: q.text };
 }
 
-module.exports = { generateQuestions, publicQuestion, DIFFICULTIES, QUESTION_COUNTS };
+module.exports = { generateQuestions, generateStream, publicQuestion, DIFFICULTIES, QUESTION_COUNTS };

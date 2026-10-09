@@ -4,7 +4,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  generateQuestions, publicQuestion, DIFFICULTIES, QUESTION_COUNTS,
+  generateQuestions, generateStream, publicQuestion, DIFFICULTIES, QUESTION_COUNTS,
 } = require('../game/questions');
 
 // Works out the answer from the question text, completely separately from the
@@ -64,4 +64,18 @@ test('every question is one direct operation between two whole numbers', () => {
       }
     }
   }
+});
+
+test('time attack streams are long, valid and never repeat', () => {
+  for (const difficulty of DIFFICULTIES) {
+    const stream = generateStream(difficulty, 120);
+    assert.equal(stream.length, 120);
+    assert.equal(new Set(stream.map((q) => q.text)).size, 120);
+    for (const q of stream) {
+      assert.ok(Number.isInteger(q.answer) && q.answer >= 0, `${q.text} gave a bad answer`);
+      assert.equal(evaluate(q.text), q.answer, `${q.text} has the wrong answer`);
+    }
+  }
+  assert.throws(() => generateStream('easy', 0));
+  assert.throws(() => generateStream('easy', 500));
 });
