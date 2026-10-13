@@ -66,7 +66,7 @@ test('only valid settings are accepted', () => {
   assert.equal(rooms.setSettings(a.room, 'hard', 15), true);
   assert.equal(rooms.setSettings(a.room, 'insane', 15), false);
   assert.equal(rooms.setSettings(a.room, 'easy', 7), false);
-  assert.deepEqual(a.room.settings, { difficulty: 'hard', questionCount: 15 });
+  assert.deepEqual(a.room.settings, { difficulty: 'hard', questionCount: 15, pointsToWin: 5 });
   rooms.removePlayer(a.room.code, a.player.id);
 });
 
@@ -75,5 +75,33 @@ test('practice rooms cannot be joined by other people', () => {
   assert.equal(a.room.practice, true);
   assert.equal(rooms.publicState(a.room).practice, true);
   assert.ok(rooms.joinRoom(a.room.code, 'pr2', 'Tunde').error);
+  rooms.removePlayer(a.room.code, a.player.id);
+});
+
+test('duel rooms hold up to 6 players, and the host cannot switch to duel with more', () => {
+  const a = rooms.createRoom('d1', 'Host');
+  for (let i = 0; i < 6; i++) {
+    assert.ok(rooms.joinRoom(a.room.code, `d${i + 2}`, `Player${i}`).room);
+  }
+  assert.equal(a.room.players.length, 7);
+
+  assert.ok(rooms.setMode(a.room, 'duel').error);
+  assert.equal(a.room.mode, 'race');
+  assert.ok(rooms.setMode(a.room, 'chess').error);
+
+  rooms.removePlayer(a.room.code, a.room.players[6].id);
+  assert.equal(rooms.setMode(a.room, 'duel').ok, true);
+  assert.equal(a.room.mode, 'duel');
+  assert.match(rooms.joinRoom(a.room.code, 'dx', 'Late').error, /full/);
+
+  [...a.room.players].forEach((p) => rooms.removePlayer(a.room.code, p.id));
+});
+
+test('points to win only accepts 3, 5 or 10', () => {
+  const a = rooms.createRoom('pw1', 'Ada');
+  assert.equal(a.room.settings.pointsToWin, 5);
+  assert.equal(rooms.setSettings(a.room, undefined, undefined, 10), true);
+  assert.equal(rooms.setSettings(a.room, undefined, undefined, 7), false);
+  assert.equal(a.room.settings.pointsToWin, 10);
   rooms.removePlayer(a.room.code, a.player.id);
 });

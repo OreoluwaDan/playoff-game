@@ -11,9 +11,11 @@
 const { randomInt, randomBytes } = require('crypto');
 const { DIFFICULTIES, QUESTION_COUNTS } = require('./questions');
 
-const MAX_PLAYERS = 8;
+const MAX_PLAYERS = 8;        // Classic Race
+const DUEL_MAX_PLAYERS = 6;   // Duel
 const MAX_ROOMS = 500;
 const CODE_LENGTH = 6;
+const POINTS_OPTIONS = [3, 5, 10]; // the points a Duel can be played to
 
 // Letters and numbers that are easy to read out loud (no 0, O, 1, I or L).
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -73,10 +75,11 @@ function createRoom(socketId, name, practice, mode) {
     code,
     hostId: player.id,
     status: 'lobby', // later: 'countdown', 'playing', 'finished'
-    settings: { difficulty: 'medium', questionCount: 10 },
+    settings: { difficulty: 'medium', questionCount: 10, pointsToWin: 5 },
     players: [player],
     game: null,
     practice: practice === true,
+    // 'race' for friends (the host can switch to 'duel'), 'timeattack' only in solo rooms.
     mode: practice === true && mode === 'timeattack' ? 'timeattack' : 'race',
   };
 
@@ -94,7 +97,8 @@ function joinRoom(code, socketId, name) {
   if (!room) return { error: 'Room not found. Check the code and try again.' };
   if (room.practice) return { error: 'Room not found. Check the code and try again.' };
   if (room.status !== 'lobby') return { error: 'That game has already started.' };
-  if (room.players.length >= MAX_PLAYERS) return { error: 'That room is full.' };
+  const cap = room.mode === 'duel' ? DUEL_MAX_PLAYERS : MAX_PLAYERS;
+  if (room.players.length >= cap) return { error: 'That room is full.' };
   if (room.players.some((p) => p.name.toLowerCase() === cleaned.toLowerCase())) {
     return { error: 'That nickname is already taken in this room.' };
   }
@@ -178,11 +182,35 @@ function getRoom(code) {
   return rooms.get(code) || null;
 }
 
-// The host changes the difficulty or question count. We check both values.
-function setSettings(room, difficulty, questionCount) {
-  if (!DIFFICULTIES.includes(difficulty)) return false;
-  if (!QUESTION_COUNTS.includes(questionCount)) return false;
-  room.settings = { difficulty, questionCount };
+// The host switches between Classic Race and Duel (friends rooms only).
+// Returns { ok: true } or { error: '...' }.
+function setMode(room, mode) {
+  if (room.practice) return { error: 'This mode cannot be changed.' };
+  if (mode !== 'race' && mode !== 'duel') return { error: 'Unknown game mode.' };
+  if (mode === 'duel' && room.players.length > DUEL_MAX_PLAYERS) {
+    return { error: `Duel allows up to ${DUEL_MAX_PLAYERS} players.` };
+  }
+  room.mode = mode;
+  return { ok: true };
+}
+
+// The host changes settings. Anything left out (undefined) stays as it is,
+// and every value that IS given must be valid, or nothing changes.
+function setSettings(room, difficulty, questionCount, pointsToWin) {
+  const next = { ...room.settings };
+  if (difficulty !== undefined) {
+    if (!DIFFICULTIES.includes(difficulty)) return false;
+    next.difficulty = difficulty;
+  }
+  if (questionCount !== undefined) {
+    if (!QUESTION_COUNTS.includes(questionCount)) return false;
+    next.questionCount = questionCount;
+  }
+  if (pointsToWin !== undefined) {
+    if (!POINTS_OPTIONS.includes(pointsToWin)) return false;
+    next.pointsToWin = pointsToWin;
+  }
+  room.settings = next;
   return true;
 }
 
@@ -206,7 +234,5 @@ function publicState(room) {
 
 module.exports = {
   createRoom, joinRoom, rejoin, markDisconnected, removePlayer,
-  getSocketInfo, getRoom, setSettings, publicState,
+  getSocketInfo, getRoom, setMode, setSettings, publicState,
 };
-
-

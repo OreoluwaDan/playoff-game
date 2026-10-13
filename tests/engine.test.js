@@ -326,3 +326,183 @@ test('no forfeit win if someone had already finished', () => {
     engine.stop(room);
   }
 });
+
+// ---------- Duel ----------
+
+// A room set up for a Duel.
+function makeDuelRoom(names, pointsToWin = 3) {
+  const made = makeRoom(names);
+  made.room.mode = 'duel';
+  made.room.settings = { difficulty: 'easy', questionCount: 10, pointsToWin };
+  return made;
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Wait until the game is showing a question (gives up after 2 seconds).
+async function untilQuestion(room) {
+  for (let i = 0; i < 400; i++) {
+    if (room.game.phase === 'question') return true;
+    await wait(5);
+  }
+  return false;
+}
+
+// Answer the current Duel question (right or wrong) for one player.
+function duelAnswer(room, net, id, correct = true) {
+  const game = room.game;
+  game.players.get(id).lastActionAt = 0;
+  const answer = game.questions[game.round - 1].answer;
+  return engine.submitAnswer(room, net, id, String(correct ? answer : answer + 1));
+}
+
+// Makes the Duel pauses very short for a test, and returns a function that puts them back.
+function fastDuel(overrides = {}) {
+  const saved = { ...engine.duelTiming };
+  Object.assign(engine.duelTiming, { countMs: 5, pauseMs: 5, roundTimeoutMs: 5000, ...overrides });
+  return () => Object.assign(engine.duelTiming, saved);
+}
+
+test('duel: the first correct answer takes the point and later answers are too late', () => {
+  const { room, net, events } = makeDuelRoom(['Ada', 'Tunde']);
+  try {
+    startNow(room, net);
+    assert.equal(room.game.phase, 'question');
+
+    const first = duelAnswer(room, net, 'p2');
+    assert.equal(first.correct, true);
+    assert.equal(room.game.players.get('p2').score, 1);
+
+    const late = duelAnswer(room, net, 'p1');
+    assert.equal(late.ok, false);
+    assert.equal(late.late, true);
+    assert.equal(room.game.players.get('p1').score, 0);
+
+    const states = events.filter((e) => e.e === 'duel:state');
+    const point = states.filter((e) => e.payload.phase === 'point').pop().payload;
+    assert.equal(point.point.winnerId, 'p2');
+    assert.equal(typeof point.point.answer, 'number');
+  } finally {
+    engine.stop(room);
+  }
+});
+
+test('duel: the question is sent without its answer', () => {
+  const { room, net, events } = makeDuelRoom(['Ada', 'Tunde']);
+  try {
+    startNow(room, net);
+    const open = events.filter((e) => e.e === 'duel:state' && e.payload.phase === 'question').pop().payload;
+    assert.equal(typeof open.text, 'string');
+    assert.equal(typeof open.digits, 'number');
+    assert.ok(!('answer' in open));
+  } finally {
+    engine.stop(room);
+  }
+});
+
+test('duel: wrong answers cost nothing and are never locked out', () => {
+  const { room, net } = makeDuelRoom(['Ada', 'Tunde']);
+  try {
+    startNow(room, net);
+    for (let i = 0; i < 12; i++) {
+      const res = duelAnswer(room, net, 'p1', false);
+      assert.equal(res.ok, true);
+      assert.equal(res.correct, false);
+    }
+    assert.equal(room.game.players.get('p1').wrongs, 12);
+    assert.equal(duelAnswer(room, net, 'p1').correct, true);
+  } finally {
+    engine.stop(room);
+  }
+});
+
+test('duel: there is no skip', () => {
+  const { room, net } = makeDuelRoom(['Ada', 'Tunde']);
+  try {
+    startNow(room, net);
+    room.game.players.get('p1').lastActionAt = 0;
+    assert.equal(engine.submitSkip(room, net, 'p1').ok, false);
+  } finally {
+    engine.stop(room);
+  }
+});
+
+test('duel: first to the target wins the game', async () => {
+  const restore = fastDuel();
+  const { room, net, events } = makeDuelRoom(['Ada', 'Tunde'], 3);
+  try {
+    startNow(room, net);
+    for (let round = 1; round <= 3; round++) {
+      assert.ok(await untilQuestion(room), 'a question should appear');
+      assert.equal(room.game.round, round);
+      assert.equal(duelAnswer(room, net, 'p1').correct, true);
+    }
+    for (let i = 0; i < 200 && room.status !== 'finished'; i++) await wait(5);
+
+    const results = events.find((e) => e.e === 'game:results').payload;
+    assert.equal(results.mode, 'duel');
+    assert.equal(results.players[0].id, 'p1');
+    assert.equal(results.players[0].score, 3);
+    assert.equal(results.players[1].score, 0);
+    assert.equal(results.forfeit, false);
+    assert.equal(results.reason, 'target');
+  } finally {
+    engine.stop(room);
+    restore();
+  }
+});
+
+test('duel: when one of two players quits, the other wins at once', () => {
+  const { room, net, events } = makeDuelRoom(['Ada', 'Tunde']);
+  try {
+    startNow(room, net);
+    engine.playerLeft(room, net, 'p1');
+
+    const results = events.find((e) => e.e === 'game:results').payload;
+    assert.equal(results.forfeit, true);
+    assert.equal(results.players[0].id, 'p2');
+    assert.equal(results.players[0].forfeitWin, true);
+    assert.equal(results.players[1].id, 'p1');
+    assert.equal(results.players[1].left, true);
+    assert.equal(room.status, 'finished');
+  } finally {
+    engine.stop(room);
+  }
+});
+
+test('duel: with three players the game carries on after one quits', () => {
+  const { room, net, events } = makeDuelRoom(['Ada', 'Tunde', 'Chi']);
+  try {
+    startNow(room, net);
+    engine.playerLeft(room, net, 'p3');
+    assert.equal(room.status, 'playing');
+    assert.equal(events.some((e) => e.e === 'game:results'), false);
+
+    engine.playerLeft(room, net, 'p2');
+    const results = events.find((e) => e.e === 'game:results').payload;
+    assert.equal(results.forfeit, true);
+    assert.equal(results.players[0].id, 'p1');
+  } finally {
+    engine.stop(room);
+  }
+});
+
+test('duel: three rounds in a row with no answer end the game', async () => {
+  const restore = fastDuel({ roundTimeoutMs: 20 });
+  const { room, net, events } = makeDuelRoom(['Ada', 'Tunde'], 5);
+  try {
+    startNow(room, net);
+    for (let i = 0; i < 300 && room.status !== 'finished'; i++) await wait(10);
+    assert.equal(room.status, 'finished');
+
+    const results = events.find((e) => e.e === 'game:results').payload;
+    assert.equal(results.reason, 'idle');
+    assert.equal(results.players[0].score, 0);
+
+    const timeouts = events.filter((e) => e.e === 'duel:state' && e.payload.phase === 'point' && e.payload.point.timeout);
+    assert.equal(timeouts.length, 3);
+  } finally {
+    engine.stop(room);
+    restore();
+  }
+});

@@ -1,6 +1,6 @@
 // game/engine.js
 // The referee. It owns the rules: countdown, checking answers, timing, penalties,
-// skip, auto-skip, the streak bonus, Time Attack and working out the winner.
+// skip, auto-skip, the streak bonus, Time Attack, Duel and working out the winner.
 //
 // It never talks to browsers directly. server.js hands it a small "net" helper:
 //   net.toPlayer(playerId, eventName, data)  -> message one player
@@ -17,11 +17,21 @@ const STREAK_NEEDED = 3;            // right first time this many in a row...
 const STREAK_BONUS_MS = 500;        // ...and each such answer after that takes off 0.5s
 const MIN_ACTION_GAP_MS = 150;      // ignore answers sent faster than this (anti-spam)
 const WRONG_RUN_LIMIT = 5;          // this many wrong answers in a row on one question...
-const WRONG_COOLDOWN_MS = 3000;     // ...locks the answer box for this long
+const WRONG_COOLDOWN_MS = 3000;     // ...locks the answer box for this long (not used in Duel)
 const TA_DURATION_MS = 60000;       // Time Attack lasts this long
 const TA_POOL_SIZE = 120;           // how many questions Time Attack prepares up front
+const DUEL_POOL_SIZE = 120;         // how many questions a Duel prepares up front
+const DUEL_MAX_EMPTY_ROUNDS = 3;    // this many rounds in a row with no answer end an idle Duel
+
+// Duel timing. It is exported so the tests can make it much faster.
+const duelTiming = {
+  countMs: 2100,          // the quick 3-2-1 before each question
+  pauseMs: 1500,          // the "who scored" moment after each round
+  roundTimeoutMs: 20000,  // nobody got it: the round ends with no point
+};
 
 const isTimeAttack = (game) => game.mode === 'timeattack';
+const isDuel = (game) => game.mode === 'duel';
 
 // What a player is allowed to see about a question: NO answer in here.
 function questionPayload(game, player, reason) {
@@ -73,21 +83,37 @@ function sendProgress(room, net) {
 
 function startGame(room, net) {
   const startAt = Date.now() + COUNTDOWN_LEAD_MS;
-  const timeAttack = room.mode === 'timeattack';
+  const mode = room.mode === 'timeattack' ? 'timeattack' : room.mode === 'duel' ? 'duel' : 'race';
+  const timeAttack = mode === 'timeattack';
+  const duel = mode === 'duel';
+  const { difficulty, questionCount } = room.settings;
 
   const game = {
-    mode: timeAttack ? 'timeattack' : 'race',
+    mode,
     questions: timeAttack
-      ? generateStream(room.settings.difficulty, TA_POOL_SIZE)
-      : generateQuestions(room.settings.difficulty, room.settings.questionCount),
+      ? generateStream(difficulty, TA_POOL_SIZE)
+      : duel
+        ? generateStream(difficulty, DUEL_POOL_SIZE)
+        : generateQuestions(difficulty, questionCount),
     startAt,
     endAt: timeAttack ? startAt + TA_DURATION_MS : null,
     startTimer: null,
     graceTimer: null,
     endTimer: null,
+    roundTimer: null,   // Duel: the "nobody got it" timer
+    nextTimer: null,    // Duel: the pauses between rounds
     over: false,
     resultsPayload: null,
     players: new Map(),
+    // ----- Duel only -----
+    phase: duel ? 'countdown' : null, // 'countdown', 'question' or 'point'
+    round: 0,                         // which round we are in (1, 2, 3...)
+    target: duel ? (room.settings.pointsToWin || 5) : 0,
+    emptyRounds: 0,                   // rounds in a row that nobody answered
+    roundStartAt: 0,
+    questionOpenedAt: 0,
+    questionEndAt: 0,
+    lastPoint: null,
   };
 
   for (const p of room.players) {
@@ -96,7 +122,7 @@ function startGame(room, net) {
       name: p.name,
       color: p.color,
       index: 0,              // which question they are on
-      score: 0,              // Time Attack: correct answers so far
+      score: 0,              // Time Attack and Duel: points so far
       skipUsed: false,       // Time Attack: the one free skip
       penaltyMs: 0,
       bonusMs: 0,
@@ -131,6 +157,12 @@ function beginRace(room, net) {
   clearTimeout(game.startTimer);
   room.status = 'playing';
 
+  // Duel: round 1 opens straight away (the big 3-2-1 has just been shown).
+  if (isDuel(game)) {
+    openQuestion(room, net, 1);
+    return;
+  }
+
   // Time Attack: the server ends the game when the 60 seconds are up.
   if (isTimeAttack(game)) {
     game.endTimer = setTimeout(() => endGame(room, net), Math.max(0, game.endAt - Date.now()));
@@ -143,6 +175,142 @@ function beginRace(room, net) {
     net.toPlayer(p.id, 'game:question', questionPayload(game, p));
   }
   sendProgress(room, net);
+}
+
+// ---------- Duel: one shared question at a time ----------
+
+function scoreboard(game) {
+  return [...game.players.values()].map((p) => ({
+    id: p.id,
+    name: p.name,
+    color: p.color,
+    score: p.score,
+    left: p.left,
+    away: p.away,
+  }));
+}
+
+// Everything a browser needs to draw the Duel right now. It is also sent to
+// a player who reconnects, so they can carry on where they were.
+function duelState(game) {
+  const state = {
+    mode: 'duel',
+    phase: game.phase,
+    round: game.round,
+    target: game.target,
+    scores: scoreboard(game),
+  };
+  if (game.phase === 'countdown') {
+    state.startAt = game.roundStartAt;   // when the question appears (server clock)
+    state.countMs = duelTiming.countMs;
+  } else if (game.phase === 'question') {
+    const q = game.questions[game.round - 1];
+    state.text = q.text;                 // the question, but never the answer
+    state.digits = String(q.answer).length;
+    state.startAt = game.questionOpenedAt;
+    state.endAt = game.questionEndAt;
+  } else if (game.phase === 'point') {
+    state.point = game.lastPoint;        // who scored (the answer is shown once the round is over)
+  }
+  return state;
+}
+
+function broadcastDuel(room, net) {
+  if (room.game) net.toRoom(room.code, 'duel:state', duelState(room.game));
+}
+
+// The question appears for everybody at the same moment.
+function openQuestion(room, net, round) {
+  const game = room.game;
+  if (!game || game.over) return;
+  const now = Date.now();
+  game.round = round;
+  game.phase = 'question';
+  game.questionOpenedAt = now;
+  game.questionEndAt = now + duelTiming.roundTimeoutMs;
+
+  clearTimeout(game.roundTimer);
+  game.roundTimer = setTimeout(() => endRound(room, net, null), duelTiming.roundTimeoutMs);
+  broadcastDuel(room, net);
+}
+
+// The quick 3-2-1 before the next question.
+function startNextRound(room, net) {
+  const game = room.game;
+  if (!game || game.over) return;
+  game.round += 1;
+  game.phase = 'countdown';
+  game.roundStartAt = Date.now() + duelTiming.countMs;
+  broadcastDuel(room, net);
+
+  const round = game.round;
+  clearTimeout(game.nextTimer);
+  game.nextTimer = setTimeout(() => openQuestion(room, net, round), duelTiming.countMs);
+}
+
+// A round is over: someone got it (winner), or nobody did (winner is null).
+function endRound(room, net, winner) {
+  const game = room.game;
+  if (!game || game.over || game.phase !== 'question') return;
+  clearTimeout(game.roundTimer);
+
+  const q = game.questions[game.round - 1];
+  game.phase = 'point';
+  if (winner) {
+    winner.score += 1;
+    game.emptyRounds = 0;
+  } else {
+    game.emptyRounds += 1;
+  }
+  game.lastPoint = {
+    round: game.round,
+    winnerId: winner ? winner.id : null,
+    winnerName: winner ? winner.name : null,
+    answer: q.answer,
+    timeout: !winner,
+  };
+  broadcastDuel(room, net);
+
+  // Is the game over? Otherwise the next round follows the pause.
+  let reason = null;
+  if (winner && winner.score >= game.target) reason = 'target';
+  else if (game.emptyRounds >= DUEL_MAX_EMPTY_ROUNDS) reason = 'idle';
+  else if (game.round >= game.questions.length) reason = 'pool';
+
+  clearTimeout(game.nextTimer);
+  game.nextTimer = setTimeout(() => {
+    if (reason) endGame(room, net, reason);
+    else startNextRound(room, net);
+  }, duelTiming.pauseMs);
+}
+
+// A Duel answer. The first correct one takes the point. Wrong answers cost nothing.
+function duelAnswer(room, net, playerId, raw) {
+  const game = room.game;
+  const p = getActivePlayer(room, playerId);
+  if (!p) return { ok: false, error: 'You cannot answer right now.' };
+  // The round already ended (someone was faster): this answer is simply too late.
+  if (game.phase !== 'question') return { ok: false, late: true, error: '' };
+
+  const now = Date.now();
+  if (now - p.lastActionAt < MIN_ACTION_GAP_MS) {
+    return { ok: false, error: 'Slow down a little.' };
+  }
+  p.lastActionAt = now;
+
+  // Never trust the browser: the answer must be plain digits.
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (!/^\d{1,9}$/.test(text)) return { ok: false, error: 'Type a number.' };
+
+  const question = game.questions[game.round - 1];
+  if (Number(text) !== question.answer) {
+    p.wrongs++;
+    return { ok: true, correct: false };
+  }
+
+  p.times.push({ ms: now - game.questionOpenedAt, skipped: false });
+  endRound(room, net, p); // this switches the phase at once, so later answers are "too late"
+  return { ok: true, correct: true, won: true };
 }
 
 // ---------- Auto-skip timer (Classic Race only) ----------
@@ -202,6 +370,8 @@ function getActivePlayer(room, playerId) {
 // ---------- What players can do ----------
 
 function submitAnswer(room, net, playerId, raw) {
+  if (room.game && isDuel(room.game)) return duelAnswer(room, net, playerId, raw);
+
   const p = getActivePlayer(room, playerId);
   if (!p) return { ok: false, error: 'You cannot answer right now.' };
 
@@ -247,6 +417,10 @@ function submitAnswer(room, net, playerId, raw) {
 }
 
 function submitSkip(room, net, playerId) {
+  if (room.game && isDuel(room.game)) {
+    return { ok: false, error: 'There is no skip in a duel.' };
+  }
+
   const p = getActivePlayer(room, playerId);
   if (!p) return { ok: false, error: 'You cannot skip right now.' };
 
@@ -294,14 +468,20 @@ function endIfEveryoneDone(room, net) {
   if (done) endGame(room, net);
 }
 
+function clearGameTimers(game) {
+  clearTimeout(game.startTimer);
+  clearTimeout(game.graceTimer);
+  clearTimeout(game.endTimer);
+  clearTimeout(game.roundTimer);
+  clearTimeout(game.nextTimer);
+  for (const p of game.players.values()) clearTimeout(p.timer);
+}
+
 function endGame(room, net, reason) {
   const game = room.game;
   if (!game || game.over) return;
   game.over = true;
-  clearTimeout(game.startTimer);
-  clearTimeout(game.graceTimer);
-  clearTimeout(game.endTimer);
-  for (const p of game.players.values()) clearTimeout(p.timer);
+  clearGameTimers(game);
   room.status = 'finished';
 
   // ----- Time Attack: the score is the number of correct answers -----
@@ -328,6 +508,46 @@ function endGame(room, net, reason) {
       players: results,
       total: 0,
       durationMs: TA_DURATION_MS,
+      gameId: game.startAt,
+    };
+    net.toRoom(room.code, 'game:results', game.resultsPayload);
+    return;
+  }
+
+  // ----- Duel: the most points wins -----
+  if (isDuel(game)) {
+    const forfeit = reason === 'forfeit'; // everyone else quit, so the last player wins
+    const results = [...game.players.values()].map((p) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+      finished: !p.left,
+      left: p.left,
+      forfeitWin: false,
+      score: p.score,
+      completed: p.score,
+      totalMs: null,
+      wrongs: p.wrongs,
+      skips: 0,
+      bonusMs: 0,
+      times: p.times,
+    }));
+    // Players still in come first, then the most points, then the fewest wrong answers.
+    results.sort((a, b) => {
+      if (a.left !== b.left) return a.left ? 1 : -1;
+      return (b.score - a.score) || (a.wrongs - b.wrongs);
+    });
+    results.forEach((r, i) => { r.rank = i + 1; });
+    if (forfeit && results.length > 0) results[0].forfeitWin = true;
+
+    game.resultsPayload = {
+      mode: 'duel',
+      players: results,
+      total: 0,
+      target: game.target,
+      rounds: game.round,
+      reason: reason || 'target',
+      forfeit,
       gameId: game.startAt,
     };
     net.toRoom(room.code, 'game:results', game.resultsPayload);
@@ -386,7 +606,8 @@ function setAway(room, net, playerId, away) {
   const p = game.players.get(playerId);
   if (!p) return;
   p.away = away;
-  sendProgress(room, net);
+  if (isDuel(game)) broadcastDuel(room, net);
+  else sendProgress(room, net);
 }
 
 // A player came back: send them whatever they need to carry on where they were.
@@ -397,6 +618,10 @@ function resync(room, net, playerId) {
   if (room.status === 'countdown') {
     net.toPlayer(playerId, 'game:countdown', { startAt: game.startAt, serverNow: Date.now(), mode: game.mode });
   } else if (room.status === 'playing') {
+    if (isDuel(game)) {
+      net.toPlayer(playerId, 'duel:state', duelState(game));
+      return;
+    }
     const p = game.players.get(playerId);
     if (!p || p.left) return;
     if (p.finishedAt !== null) net.toPlayer(playerId, 'game:finished', {});
@@ -414,6 +639,18 @@ function playerLeft(room, net, playerId) {
   if (!p || p.left) return;
   p.left = true;
   clearTimeout(p.timer);
+
+  // Duel: when only one player is left, that player wins straight away.
+  if (isDuel(game)) {
+    const stillIn = [...game.players.values()].filter((q) => !q.left);
+    if (stillIn.length <= 1) {
+      endGame(room, net, stillIn.length === 1 ? 'forfeit' : 'empty');
+      return;
+    }
+    broadcastDuel(room, net);
+    return;
+  }
+
   sendProgress(room, net);
 
   // Classic Race with friends: if only one player is left, and nobody has finished,
@@ -435,10 +672,7 @@ function stop(room) {
   const game = room.game;
   if (!game) return;
   game.over = true;
-  clearTimeout(game.startTimer);
-  clearTimeout(game.graceTimer);
-  clearTimeout(game.endTimer);
-  for (const p of game.players.values()) clearTimeout(p.timer);
+  clearGameTimers(game);
 }
 
 // Host presses Rematch: back to the lobby, same room, same people.
@@ -453,4 +687,5 @@ function rematch(room) {
 module.exports = {
   startGame, beginRace, submitAnswer, submitSkip,
   setAway, resync, playerLeft, stop, rematch,
+  duelTiming,
 };

@@ -138,18 +138,33 @@ io.on('connection', (socket) => {
     engine.resync(room, net, player.id); // ...then the current question, countdown or results
   });
 
-  // The host changes difficulty or number of questions.
+    // The host changes the mode, difficulty, number of questions or points to win.
   socket.on('room:settings', (data) => {
     const me = getMe(socket);
     if (!me || me.room.hostId !== me.playerId || me.room.status !== 'lobby') return;
-    if (!rooms.setSettings(me.room, data && data.difficulty, data && data.questionCount)) return;
-    io.to(me.room.code).emit('room:update', rooms.publicState(me.room));
+    if (!data || typeof data !== 'object') return;
+    const room = me.room;
+
+    if (data.mode !== undefined && data.mode !== room.mode) {
+      const result = rooms.setMode(room, data.mode);
+      if (result.error) {
+        socket.emit('room:notice', { text: result.error });
+        io.to(room.code).emit('room:update', rooms.publicState(room)); // puts the host's choice back
+        return;
+      }
+    }
+    if (!rooms.setSettings(room, data.difficulty, data.questionCount, data.pointsToWin)) return;
+    io.to(room.code).emit('room:update', rooms.publicState(room));
   });
 
   // The host presses Start.
   socket.on('game:start', () => {
     const me = getMe(socket);
     if (!me || me.room.hostId !== me.playerId || me.room.status !== 'lobby') return;
+    if (me.room.mode === 'duel' && me.room.players.length < 2) {
+      socket.emit('room:notice', { text: 'A duel needs at least 2 players.' });
+      return;
+    }
     engine.startGame(me.room, net);
     io.to(me.room.code).emit('room:update', rooms.publicState(me.room));
   });
