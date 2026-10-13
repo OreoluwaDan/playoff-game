@@ -47,11 +47,15 @@ const playersLabel = $('playersLabel');
 const playerCount = $('playerCount');
 const playerListEl = $('playerList');
 const modeBlock = $('modeBlock');
+const modeCards = document.querySelectorAll('#modeBlock .mode-card');
+const duelTag = $('duelTag');
 const practiceBest = $('practiceBest');
 const modeInfo = $('modeInfo');
 const difficultyTiles = $('difficultyTiles');
 const questionsLabel = $('questionsLabel');
 const countTiles = $('countTiles');
+const pointsLabel = $('pointsLabel');
+const pointsTiles = $('pointsTiles');
 const startBtn = $('startBtn');
 const lobbyHint = $('lobbyHint');
 
@@ -62,8 +66,10 @@ const progressFill = $('progressFill');
 const timerEl = $('timer');
 const penPop = $('penPop');
 const raceTrack = $('raceTrack');
+const scoreboard = $('scoreboard');
 const qProgress = $('qProgress');
 const questionText = $('questionText');
+const qSub = $('qSub');
 const answerInput = $('answerInput');
 const feedback = $('feedback');
 const hintLine = $('hintLine');
@@ -138,6 +144,7 @@ let myId = null;            // our permanent player id (it survives reconnects)
 let clockOffset = 0;        // (server clock) minus (this device's clock), in ms
 let countdownTimer = null;
 let gameTicker = null;      // updates the timer and hints while playing
+let duelTimer = null;       // updates the Duel countdown and round bar
 let lockTimer = null;       // counts down the "too many wrong tries" pause
 let busy = false;           // true while we wait for the server to answer our last move
 let finished = false;       // true once we have answered every question
@@ -153,12 +160,16 @@ let laneEls = new Map();    // player id -> that player's dot on the race track
 let ghostReady = false;     // has the practice "PB" dot been set up for this game?
 let ghostBestMs = 0;        // the best time the ghost dot follows (0 = no ghost)
 let ghostDot = null;        // the practice "PB" dot on the race track
-let gameMode = 'race';      // 'race' or 'timeattack'
-let lastScore = 0;          // Time Attack: your score so far (saved if you quit)
-let lastTotalQ = 0;         // how many questions the race has
-let toastTimer = null;
+let gameMode = 'race';      // 'race', 'timeattack' or 'duel'
 let endAtLocal = 0;         // Time Attack: when the 60 seconds end, on THIS device's clock
 let taTotalMs = 60000;      // Time Attack: how long the whole run lasts
+let lastScore = 0;          // Time Attack and Duel: your score so far (saved if you quit)
+let lastTotalQ = 0;         // how many questions the race has
+let toastTimer = null;
+let duelPhase = null;       // 'countdown', 'question' or 'point' while a Duel is on
+let duelStartLocal = 0;     // Duel: when the question appears, on THIS device's clock
+let duelEndLocal = 0;       // Duel: when the round runs out, on THIS device's clock
+let duelLastScores = new Map(); // player id -> score we last drew (to animate a new point)
 let setupMode = 'new';      // 'new' (first visit) or 'edit' (changing the profile)
 let setupAvatar = 0;        // the avatar chosen on the setup screen
 
@@ -433,7 +444,8 @@ function recordGame(entry) {
     versus: (saved && saved.versus) || 0,
   };
   totals.games++;
-  if (entry.mode === 'versus') {
+  // Races and duels against friends count towards your wins and win rate.
+  if (entry.mode === 'versus' || entry.mode === 'duel') {
     totals.versus++;
     if (entry.won) totals.wins++;
   }
@@ -510,10 +522,15 @@ function renderProfile() {
     const li = document.createElement('li');
     li.className = 'player history-row';
 
-    const modeName = g.mode === 'timeattack' ? 'Time Attack' : g.mode === 'practice' ? 'Practice' : g.mode === 'versus' ? 'Race' : 'Solo';
+    const modeName = g.mode === 'timeattack' ? 'Time Attack'
+      : g.mode === 'practice' ? 'Practice'
+      : g.mode === 'duel' ? 'Duel'
+      : g.mode === 'versus' ? 'Race'
+      : 'Solo';
     let label;
     if (g.quit) label = `Quit · ${modeName}`;
     else if (g.forfeit) label = 'Won (opponent left)';
+    else if (g.mode === 'duel') label = `Duel · ${ordinal(g.rank)} of ${g.players}`;
     else if (g.mode === 'versus') label = g.finished ? `${ordinal(g.rank)} of ${g.players}` : 'Did not finish';
     else if (g.mode === 'timeattack') label = 'Time Attack';
     else label = modeName + (g.finished ? '' : ' · unfinished');
@@ -523,12 +540,14 @@ function renderProfile() {
     name.textContent = label;
 
     const date = new Date(g.t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-    const meta = document.createElement('span');
-    meta.className = 'meta';
     let detail;
     if (g.mode === 'timeattack') detail = `${g.score || 0} correct`;
+    else if (g.mode === 'duel') detail = `${g.score || 0} points`;
     else if (!g.finished) detail = `${g.progress || 0}/${g.count} answered`;
     else detail = `${g.count} questions · ${g.totalMs ? formatTime(g.totalMs) : '–'}`;
+
+    const meta = document.createElement('span');
+    meta.className = 'meta';
     meta.textContent = `${capitalize(g.difficulty)} · ${detail} · ${date}`;
 
     li.append(name, meta);
@@ -665,7 +684,11 @@ function setTiles(container, value, enabled) {
 function renderRoom(room) {
   currentRoom = room;
   const practice = !!room.practice;
-  const ta = (room.mode || 'race') === 'timeattack';
+  const mode = room.mode || 'race';        // 'race', 'duel' or 'timeattack'
+  const ta = mode === 'timeattack';
+  const duel = mode === 'duel';
+  const isHost = room.hostId === myId;
+  const settings = room.settings;
 
   // A solo room has no code, no other players and no mode choice, so hide those parts.
   lobbyTitle.textContent = ta ? 'Time Attack' : practice ? 'Practice' : 'Waiting room';
@@ -673,15 +696,29 @@ function renderRoom(room) {
   playersLabel.hidden = practice;
   playerListEl.hidden = practice;
   modeBlock.hidden = practice;
-  questionsLabel.hidden = ta;   // Time Attack has no fixed number of questions
-  countTiles.hidden = ta;
-  startBtn.textContent = ta ? 'Start Time Attack' : practice ? 'Start practice' : 'Start game';
+  questionsLabel.hidden = ta || duel;   // Time Attack and Duel have no fixed number of questions
+  countTiles.hidden = ta || duel;
+  pointsLabel.hidden = !duel;           // a Duel has a points target instead
+  pointsTiles.hidden = !duel;
+  startBtn.textContent = ta ? 'Start Time Attack' : duel ? 'Start duel' : practice ? 'Start practice' : 'Start game';
+  startBtn.disabled = duel && room.players.length < 2;
 
   modeInfo.textContent = ta
     ? 'You have 60 seconds. Every right answer is a point, wrong answers cost nothing, and you get one free skip.'
-    : practice
-      ? 'Race your own best time. A grey dot shows your best pace.'
-      : 'Everyone gets the same questions. Fastest total time wins. A skip adds 15 seconds.';
+    : duel
+      ? `One question at a time for everyone. The first correct answer takes the point, and wrong answers cost nothing. First to ${settings.pointsToWin} points wins. Needs 2 to 6 players.`
+      : practice
+        ? 'Race your own best time. A grey dot shows your best pace.'
+        : 'Everyone gets the same questions. Fastest total time wins. A skip adds 15 seconds.';
+
+  // The two game mode cards (friends rooms): only the host can change them.
+  modeCards.forEach((card) => {
+    const on = card.dataset.mode === mode;
+    card.classList.toggle('on', on);
+    card.setAttribute('aria-pressed', on ? 'true' : 'false');
+    card.disabled = !isHost || (card.dataset.mode === 'duel' && room.players.length > 6);
+  });
+  duelTag.hidden = room.players.length <= 6;
 
   roomCodeEl.textContent = room.code;
   playerCount.textContent = `· ${room.players.length}`;
@@ -714,13 +751,13 @@ function renderRoom(room) {
 
   // In solo rooms, show your best for the chosen setting.
   if (ta) {
-    const best = getTABest(room.settings.difficulty);
+    const best = getTABest(settings.difficulty);
     practiceBest.textContent = best
-      ? `Your best on ${room.settings.difficulty}: ${best} correct`
-      : `No best score on ${room.settings.difficulty} yet`;
+      ? `Your best on ${settings.difficulty}: ${best} correct`
+      : `No best score on ${settings.difficulty} yet`;
     practiceBest.hidden = false;
   } else if (practice) {
-    const best = getBest(room.settings.difficulty, room.settings.questionCount);
+    const best = getBest(settings.difficulty, settings.questionCount);
     practiceBest.textContent = best
       ? `Your best on this setting: ${formatTime(best)}`
       : 'No best time on this setting yet';
@@ -730,9 +767,9 @@ function renderRoom(room) {
   }
 
   // Only the host can change settings or start the game.
-  const isHost = room.hostId === myId;
-  setTiles(difficultyTiles, room.settings.difficulty, isHost);
-  setTiles(countTiles, room.settings.questionCount, isHost);
+  setTiles(difficultyTiles, settings.difficulty, isHost);
+  setTiles(countTiles, settings.questionCount, isHost);
+  setTiles(pointsTiles, settings.pointsToWin, isHost);
   startBtn.hidden = !isHost;
   lobbyHint.hidden = isHost;
 }
@@ -761,19 +798,26 @@ copyLinkBtn.addEventListener('click', () => {
   copyText(`${location.origin}/?code=${currentRoom.code}`, copyLinkBtn, 'Copied!');
 });
 
-// The host taps a difficulty or question-count tile.
-function tileHandler(kind) {
+// The host taps a tile. We send only the one thing that changed.
+function tileHandler(field) {
   return (e) => {
     const tile = e.target.closest('.tile');
     if (!tile || tile.disabled || !currentRoom) return;
-    socket.emit('room:settings', {
-      difficulty: kind === 'difficulty' ? tile.dataset.value : currentRoom.settings.difficulty,
-      questionCount: kind === 'count' ? Number(tile.dataset.value) : currentRoom.settings.questionCount,
-    });
+    const value = field === 'difficulty' ? tile.dataset.value : Number(tile.dataset.value);
+    socket.emit('room:settings', { [field]: value });
   };
 }
 difficultyTiles.addEventListener('click', tileHandler('difficulty'));
-countTiles.addEventListener('click', tileHandler('count'));
+countTiles.addEventListener('click', tileHandler('questionCount'));
+pointsTiles.addEventListener('click', tileHandler('pointsToWin'));
+
+// The host taps a game mode card (Classic Race or Duel).
+modeCards.forEach((card) => {
+  card.addEventListener('click', () => {
+    if (card.disabled || !currentRoom) return;
+    socket.emit('room:settings', { mode: card.dataset.mode });
+  });
+});
 
 startBtn.addEventListener('click', () => socket.emit('game:start'));
 rematchBtn.addEventListener('click', () => socket.emit('game:rematch'));
@@ -782,7 +826,7 @@ rematchBtn.addEventListener('click', () => socket.emit('game:rematch'));
 socket.on('room:update', (room) => {
   if (!currentRoom || room.code !== currentRoom.code) return;
   renderRoom(room);
-    // If the host just left while we are looking at the results, update who can press Rematch.
+  // If the host just left while we are looking at the results, update who can press Rematch.
   if (!$('results').hidden) {
     const nowHost = room.hostId === myId;
     rematchBtn.hidden = !nowHost;
@@ -806,10 +850,17 @@ function resetGameUI() {
   ghostReady = false;
   ghostBestMs = 0;
   ghostDot = null;
+  duelPhase = null;
+  duelLastScores = new Map();
+  lastScore = 0;
+  scoreboard.innerHTML = '';
+  scoreboard.hidden = true;
   raceTrack.querySelectorAll('.race-dot').forEach((d) => d.remove());
   progressFill.style.width = '0%';
   progressFill.classList.remove('low');
   timerEl.textContent = '0:00.0';
+  questionText.className = 'question';
+  qSub.textContent = '';
   feedback.textContent = '';
   hintLine.hidden = true;
   answerInput.hidden = false;
@@ -821,14 +872,18 @@ function resetGameUI() {
 
 socket.on('game:countdown', ({ startAt, mode }) => {
   resetGameUI();
+  gameMode = mode || 'race';
   showScreen('countdown');
   // startAt is on the SERVER's clock. Convert it to this device's clock.
   goAtLocal = startAt - clockOffset;
 
   if (currentRoom) {
+    const s = currentRoom.settings;
     countInfo.textContent = mode === 'timeattack'
-      ? `60 seconds · ${capitalize(currentRoom.settings.difficulty)}`
-      : `${currentRoom.settings.questionCount} questions · ${capitalize(currentRoom.settings.difficulty)}`;
+      ? `60 seconds · ${capitalize(s.difficulty)}`
+      : mode === 'duel'
+        ? `First to ${s.pointsToWin} points · ${capitalize(s.difficulty)}`
+        : `${s.questionCount} questions · ${capitalize(s.difficulty)}`;
   }
 
   const ring = countNumber.parentElement;
@@ -870,6 +925,8 @@ function startTicker() {
 function stopTicker() {
   clearInterval(gameTicker);
   gameTicker = null;
+  clearInterval(duelTimer);
+  duelTimer = null;
 }
 
 // Runs 10 times a second: updates the timer, the ghost dot and the hints.
@@ -950,11 +1007,14 @@ function showQuestion(q, message) {
   showScreen('game');
 
   gameMode = q.mode || 'race';
+  const ta = gameMode === 'timeattack';
   lastScore = q.score || 0;
   lastTotalQ = q.total || 0;
   quitBtn.hidden = false;
-  const ta = gameMode === 'timeattack';
   raceTrack.hidden = ta; // a solo Time Attack run has nobody to race on the track
+  scoreboard.hidden = true;
+  questionText.className = 'question';
+  qSub.textContent = '';
   if (!ghostReady) setupGhost();
 
   expectedDigits = q.digits;
@@ -1024,6 +1084,124 @@ socket.on('game:question', (q) => {
 
 socket.on('game:finished', showFinished);
 
+// ----- Duel: one shared question at a time -----
+function startDuelTicker() {
+  if (!duelTimer) duelTimer = setInterval(tickDuel, 80);
+  tickDuel();
+}
+
+// Runs about 12 times a second during a Duel: the quick 3-2-1 and the round bar.
+function tickDuel() {
+  const now = Date.now();
+
+  if (duelPhase === 'countdown') {
+    const left = duelStartLocal - now; // time until the question appears
+    const text = left > 1400 ? '3' : left > 700 ? '2' : '1';
+    if (questionText.textContent !== text) {
+      questionText.textContent = text;
+      Sound.tick();
+      // Restart the little "pop" animation on every new number.
+      questionText.classList.remove('pop');
+      void questionText.offsetWidth;
+      questionText.classList.add('pop');
+    }
+  } else if (duelPhase === 'question') {
+    const total = Math.max(1, duelEndLocal - duelStartLocal);
+    const remaining = Math.max(0, duelEndLocal - now);
+    progressFill.style.width = `${Math.min(100, (remaining / total) * 100)}%`;
+    progressFill.classList.toggle('low', remaining <= 5000);
+    timerEl.textContent = `${Math.ceil(remaining / 1000)}s`;
+  }
+}
+
+// One chip for each player, with their score. Order stays the same all game.
+function renderScoreboard(scores) {
+  scoreboard.hidden = false;
+  scoreboard.innerHTML = '';
+  scores.forEach((p) => {
+    const li = document.createElement('li');
+    li.className = 'score-chip' + (p.id === myId ? ' me' : '') + (p.left || p.away ? ' gone' : '');
+    li.title = p.name + (p.id === myId ? ' (you)' : '');
+
+    const num = document.createElement('span');
+    num.className = 'score-num';
+    num.textContent = p.score;
+    li.append(makeAvatar(p), num);
+
+    const before = duelLastScores.get(p.id);
+    if (before !== undefined && p.score > before) li.classList.add('bump'); // a new point
+    duelLastScores.set(p.id, p.score);
+
+    scoreboard.append(li);
+    if (p.id === myId) lastScore = p.score;
+  });
+}
+
+// The server tells us what is happening in the Duel right now. It sends this
+// every time something changes, and to anyone who reconnects.
+socket.on('duel:state', (s) => {
+  clearInterval(countdownTimer); // the big start countdown is over
+  gameMode = 'duel';
+  duelPhase = s.phase;
+  currentIndex = s.round;
+  showScreen('game');
+
+  // The Duel layout: a scoreboard instead of the race track, and no skip button.
+  raceTrack.hidden = true;
+  skipBtn.hidden = true;
+  hintLine.hidden = true;
+  finishedMsg.hidden = true;
+  answerInput.hidden = false;
+  answerInput.readOnly = false;
+  quitBtn.hidden = false;
+  renderScoreboard(s.scores);
+
+  qProgress.textContent = `Round ${s.round} · First to ${s.target}`;
+  qSub.textContent = '';
+  feedback.textContent = '';
+  answerInput.value = '';
+
+  if (s.phase === 'countdown') {
+    // The quick 3-2-1. tickDuel() draws the numbers.
+    duelStartLocal = s.startAt - clockOffset;
+    questionText.className = 'question duel-count';
+    questionText.textContent = '';
+    progressFill.style.width = '0%';
+    progressFill.classList.remove('low');
+    timerEl.textContent = '';
+  } else if (s.phase === 'question') {
+    duelStartLocal = s.startAt - clockOffset;
+    duelEndLocal = s.endAt - clockOffset;
+    questionText.className = 'question';
+    questionText.textContent = s.text;
+    expectedDigits = s.digits;
+    answerInput.maxLength = s.digits;
+    if (s.round > 1) Sound.go(); // round 1 already had the big GO!
+  } else if (s.phase === 'point') {
+    // Who got it? (Or nobody.) The pause is short, so keep the message short.
+    const pt = s.point || {};
+    questionText.className = 'question duel-point';
+    progressFill.style.width = '0%';
+    timerEl.textContent = '';
+    if (pt.timeout) {
+      questionText.textContent = "Time's up";
+      qSub.textContent = `Nobody got it. The answer was ${pt.answer}`;
+      Sound.skip();
+    } else if (pt.winnerId === myId) {
+      questionText.textContent = 'You got it!';
+      qSub.textContent = `The answer was ${pt.answer}`;
+      Sound.correct();
+    } else {
+      questionText.textContent = `${pt.winnerName} got it!`; // textContent: safe even if the name has odd characters
+      qSub.textContent = `The answer was ${pt.answer}`;
+      Sound.skip();
+    }
+  }
+
+  answerInput.focus(); // keeps the phone keyboard open between rounds
+  startDuelTicker();
+});
+
 // Restarts the little shake animation on the answer box.
 function shake() {
   answerInput.classList.remove('shake');
@@ -1062,6 +1240,7 @@ function submitAnswer() {
     busy = false;
     if (!res.ok) {
       answerInput.value = '';
+      if (res.late) return; // someone was faster. The "who got it" screen is on its way
       if (res.cooldownMs) lockInput(res.cooldownMs);
       else feedback.textContent = res.error;
       return;
@@ -1075,6 +1254,8 @@ function submitAnswer() {
       if (res.cooldownMs) lockInput(res.cooldownMs);
       return;
     }
+    // In a Duel, the server's "point" update shows the result, so there is nothing more to do.
+    if (gameMode === 'duel') return;
     // Correct: the reply already contains the next question, so show it at once.
     Sound.correct();
     if (res.finished) showFinished();
@@ -1100,6 +1281,8 @@ skipBtn.addEventListener('click', submitSkip);
 // Every time a digit is typed: keep only digits, then check if the answer is complete.
 answerInput.addEventListener('input', () => {
   answerInput.value = answerInput.value.replace(/\D/g, '');
+  // Duel: digits typed during the 3-2-1 or the "who got it" moment are ignored.
+  if (gameMode === 'duel' && duelPhase !== 'question') { answerInput.value = ''; return; }
   submitAnswer();
 });
 
@@ -1119,7 +1302,9 @@ function openQuit() {
   const solo = !!(currentRoom && currentRoom.practice);
   quitText.textContent = solo
     ? "This run won't count towards your best score. It will be saved in your history as Quit."
-    : 'Your friends will be told you left, and the game carries on without you. The clock keeps running while you decide.';
+    : gameMode === 'duel'
+      ? 'Your friends will be told you left, and the duel carries on without you.'
+      : 'Your friends will be told you left, and the game carries on without you. The clock keeps running while you decide.';
   quitModal.hidden = false;
   quitKeep.focus();
 }
@@ -1136,19 +1321,20 @@ function confirmQuit() {
   if (room && myId) {
     const practice = !!room.practice;
     const ta = gameMode === 'timeattack';
+    const duel = gameMode === 'duel';
     const versus = !practice && room.players.length >= 2;
     recordGame({
       id: `quit-${room.code}-${Date.now()}-${myId}`,
       t: Date.now(),
-      mode: ta ? 'timeattack' : practice ? 'practice' : versus ? 'versus' : 'solo',
+      mode: ta ? 'timeattack' : duel ? 'duel' : practice ? 'practice' : versus ? 'versus' : 'solo',
       difficulty: room.settings.difficulty,
-      count: ta ? 0 : lastTotalQ,
+      count: (ta || duel) ? 0 : lastTotalQ,
       players: room.players.length,
       rank: null,
       finished: false,
       quit: true,
       totalMs: null,
-      score: ta ? lastScore : null,
+      score: (ta || duel) ? lastScore : null,
       progress: currentIndex,
       wrongs: 0,
       skips: 0,
@@ -1195,7 +1381,7 @@ socket.on('game:progress', ({ players, total }) => renderLanes(players, total));
 // ============================================================
 // Results
 // ============================================================
-function renderPodium(players) {
+function renderPodium(players, duel) {
   podium.innerHTML = '';
   const top = players.slice(0, 3);
   // Display order: 2nd, 1st, 3rd, so the winner stands in the middle.
@@ -1217,7 +1403,9 @@ function renderPodium(players) {
 
     const time = document.createElement('div');
     time.className = 'pod-time';
-    time.textContent = p.finished ? formatTime(p.totalMs) : p.left ? 'left' : p.forfeitWin ? 'winner' : 'DNF';
+    time.textContent = duel
+      ? (p.left ? 'left' : `${p.score} pts`)
+      : p.finished ? formatTime(p.totalMs) : p.left ? 'left' : p.forfeitWin ? 'winner' : 'DNF';
 
     col.append(makeAvatar(p, true), block, name, time);
     podium.append(col);
@@ -1269,17 +1457,28 @@ function confetti() {
   setTimeout(() => layer.remove(), 5000);
 }
 
-socket.on('game:results', ({ players, total, gameId, mode, durationMs }) => {
-  clearInterval(countdownTimer);
+socket.on('game:results', ({ players, total, gameId, mode, durationMs, target, reason }) => {
   quitModal.hidden = true;
+  clearInterval(countdownTimer);
   clearInterval(lockTimer);
   stopTicker();
 
   const me = players.find((p) => p.id === myId);
   const room = currentRoom;
   const ta = mode === 'timeattack';
+  const duel = mode === 'duel';
   const practice = !!(room && room.practice);
   const versus = !practice && players.length >= 2;
+
+  // Duel: who really won? A forfeit counts. A tie at the top, or a 0-0 game, does not.
+  let duelWon = false;
+  let duelTied = false;
+  if (duel && me && !me.left) {
+    const alive = players.filter((p) => !p.left);
+    const top = Math.max(...alive.map((p) => p.score));
+    duelTied = top > 0 && me.score === top && alive.filter((p) => p.score === top).length > 1;
+    duelWon = !!me.forfeitWin || (top > 0 && me.score === top && !duelTied);
+  }
 
   // 1) Save this game to the history (skipped if it was already saved).
   let fresh = false;
@@ -1287,17 +1486,17 @@ socket.on('game:results', ({ players, total, gameId, mode, durationMs }) => {
     fresh = recordGame({
       id: `${room.code}-${gameId || Date.now()}-${myId}`,
       t: Date.now(),
-      mode: ta ? 'timeattack' : practice ? 'practice' : versus ? 'versus' : 'solo',
+      mode: ta ? 'timeattack' : duel ? 'duel' : practice ? 'practice' : versus ? 'versus' : 'solo',
       difficulty: room.settings.difficulty,
-      count: ta ? 0 : total,
+      count: (ta || duel) ? 0 : total,
       players: players.length,
       rank: me.rank,
       finished: me.finished,
       totalMs: me.totalMs,
-      score: ta ? me.score : null,
+      score: (ta || duel) ? me.score : null,
       wrongs: me.wrongs,
       skips: me.skips,
-      won: versus && me.rank === 1 && (me.finished || !!me.forfeitWin),
+      won: duel ? duelWon : versus && me.rank === 1 && (me.finished || !!me.forfeitWin),
       forfeit: !!me.forfeitWin,
       progress: me.completed,
     });
@@ -1326,7 +1525,7 @@ socket.on('game:results', ({ players, total, gameId, mode, durationMs }) => {
       bestLine.textContent = `${previous - me.score} short of your best (${previous})`;
     }
     bestLine.hidden = false;
-  } else if (me && me.finished && room) {
+  } else if (me && me.finished && room && !duel) {
     const { difficulty } = room.settings;
     const previous = getBest(difficulty, total);
 
@@ -1351,8 +1550,20 @@ socket.on('game:results', ({ players, total, gameId, mode, durationMs }) => {
     if (ta) {
       resultTitle.textContent = newBest ? 'New best!' : 'Time!';
       resultSub.textContent = `${me.score} correct in ${Math.round((durationMs || 60000) / 1000)} seconds`;
+    } else if (duel) {
+      if (reason === 'idle') resultTitle.textContent = 'Game over';
+      else if (duelWon) resultTitle.textContent = 'You won!';
+      else if (duelTied) resultTitle.textContent = 'A tie!';
+      else resultTitle.textContent = `${ordinal(me.rank)} place`;
+
+      resultSub.textContent = me.forfeitWin
+        ? 'The other players left the game'
+        : reason === 'idle'
+          ? 'Nobody answered for 3 rounds'
+          : reason === 'pool'
+            ? 'The game ran out of questions'
+            : `${me.score} ${me.score === 1 ? 'point' : 'points'} · first to ${target}`;
     } else {
-      if (me.forfeitWin) resultTitle.textContent = 'You win!';
       if (me.forfeitWin) resultTitle.textContent = 'You win!';
       else if (!me.finished) resultTitle.textContent = 'Time is up';
       else if (practice) resultTitle.textContent = newBest ? 'New best!' : 'Done!';
@@ -1373,7 +1584,7 @@ socket.on('game:results', ({ players, total, gameId, mode, durationMs }) => {
   resultList.hidden = practice;
   resultList.innerHTML = '';
   if (!practice) {
-    renderPodium(players);
+    renderPodium(players, duel);
     players.forEach((p) => {
       const li = document.createElement('li');
       li.className = 'player';
@@ -1388,18 +1599,23 @@ socket.on('game:results', ({ players, total, gameId, mode, durationMs }) => {
 
       const meta = document.createElement('span');
       meta.className = 'meta';
-      meta.textContent = p.finished
-        ? `${formatTime(p.totalMs)} · ${p.wrongs} wrong · ${p.skips} skipped`
-        : p.forfeitWin
-          ? `opponent left · ${p.completed}/${total}`
-          : `${p.left ? 'left' : 'did not finish'} (${p.completed}/${total})`;
+      if (duel) {
+        meta.textContent = p.left ? 'left' : `${p.score} points · ${p.wrongs} wrong`;
+      } else {
+        meta.textContent = p.finished
+          ? `${formatTime(p.totalMs)} · ${p.wrongs} wrong · ${p.skips} skipped`
+          : p.forfeitWin
+            ? `opponent left · ${p.completed}/${total}`
+            : `${p.left ? 'left' : 'did not finish'} (${p.completed}/${total})`;
+      }
 
       li.append(rank, makeAvatar(p), name, meta);
       resultList.append(li);
     });
   }
 
-  renderChart(me);
+  if (duel) chartCard.hidden = true;
+  else renderChart(me);
 
   const isHost = room && room.hostId === myId;
   rematchBtn.textContent = practice ? 'Play again' : 'Rematch';
@@ -1413,12 +1629,13 @@ socket.on('game:results', ({ players, total, gameId, mode, durationMs }) => {
   const celebrate = fresh && me && (
     (ta && newBest) ||
     forfeitWin ||
-    (!ta && me.finished && ((practice && newBest) || (versus && me.rank === 1)))
+    (duel && duelWon) ||
+    (!ta && !duel && me.finished && ((practice && newBest) || (versus && me.rank === 1)))
   );
   setTimeout(() => {
     if ($('results').hidden) return; // they already left the results screen
     if (celebrate) { Sound.win(); confetti(); }
-    else if (fresh && me && (ta || me.finished)) Sound.finish();
+    else if (fresh && me && (ta || duel || me.finished)) Sound.finish();
   }, practice ? 300 : 900);
 });
 

@@ -511,3 +511,32 @@ button { font-family: inherit; cursor: pointer; }
   background: #4b4b4b; color: #fff;
   font-size: 0.9rem; font-weight: 800; text-align: center;
 }
+
+/* ---------- Stage 11B: Duel ---------- */
+.mode-card.on:disabled { opacity: 1; }
+
+.scoreboard {
+  list-style: none; margin: 2px 0 12px; padding: 0;
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+}
+.score-chip {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 12px 3px 3px;
+  border: 2px solid var(--border); border-radius: 999px;
+  font-weight: 900;
+}
+.score-chip.me { border-color: #84d8ff; background: #f3fbff; }
+.score-chip.gone { opacity: 0.4; }
+.score-chip .avatar { width: 26px; height: 26px; font-size: 0.65rem; }
+.score-num { min-width: 1ch; font-variant-numeric: tabular-nums; }
+.score-chip.bump { animation: bump 0.4s; }
+@keyframes bump {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+
+.q-sub { min-height: 1.3em; margin-top: 4px; font-size: 0.95rem; font-weight: 800; color: var(--muted); }
+.question.duel-count { font-size: clamp(3.4rem, 18vw, 5rem); color: var(--green); }
+.question.duel-count.pop { animation: pop 0.35s ease-out; }
+.question.duel-point { font-size: clamp(1.6rem, 8vw, 2.2rem); white-space: normal; }

@@ -125,12 +125,12 @@
       <div id="modeBlock">
         <p class="label">GAME MODE</p>
         <div class="mode-cards">
-          <button class="mode-card on" data-mode="race" aria-pressed="true">
+          <button class="mode-card" data-mode="race" aria-pressed="false">
             <span class="mode-title">Classic Race</span>
             <span class="mode-desc">Same questions for everyone. Fastest total time wins.</span>
           </button>
-          <button class="mode-card" data-mode="duel" disabled>
-            <span class="mode-title">Duel <span class="soon">Coming soon</span></span>
+          <button class="mode-card" data-mode="duel" aria-pressed="false">
+            <span class="mode-title">Duel <span id="duelTag" class="soon" hidden>Max 6 players</span></span>
             <span class="mode-desc">One question at a time. First correct answer takes the point.</span>
           </button>
         </div>
@@ -152,6 +152,13 @@
         <button class="tile" data-value="10">10</button>
         <button class="tile" data-value="15">15</button>
         <button class="tile" data-value="20">20</button>
+      </div>
+
+      <p id="pointsLabel" class="label" hidden>POINTS TO WIN</p>
+      <div id="pointsTiles" class="tiles" hidden>
+        <button class="tile" data-value="3">3</button>
+        <button class="tile" data-value="5">5</button>
+        <button class="tile" data-value="10">10</button>
       </div>
 
       <button id="startBtn" class="btn btn-green">Start game</button>
@@ -180,12 +187,14 @@
           <div class="race-line"></div>
           <div class="race-end"></div>
         </div>
+        <ul id="scoreboard" class="scoreboard" aria-label="Scores" hidden></ul>
       </div>
 
       <div class="play">
         <div class="question-card">
           <div id="qProgress" class="q-count"></div>
           <div id="questionText" class="question"></div>
+          <div id="qSub" class="q-sub"></div>
         </div>
 
         <div class="answer-area">
@@ -257,7 +266,7 @@
 
   </main>
 
-    <!-- Quit confirmation -->
+  <!-- Quit confirmation -->
   <div id="quitModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="quitTitle" hidden>
     <div class="modal-card">
       <h2 id="quitTitle">Quit this game?</h2>
@@ -280,6 +289,10 @@
       <div class="help-item">
         <h3>Skipping in a race</h3>
         <p>Stuck? Skip moves you on but adds 15 seconds to your time. If you stay on one question for 45 seconds, it skips for you.</p>
+      </div>
+      <div class="help-item">
+        <h3>Duel</h3>
+        <p>Everyone sees the same question at the same moment. The first correct answer takes the point, and wrong answers cost nothing. First to the target score wins.</p>
       </div>
       <div class="help-item">
         <h3>Practice</h3>
