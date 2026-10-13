@@ -271,3 +271,58 @@ test('time attack: wrong answers cost nothing and the score is the result', () =
     engine.stop(room);
   }
 });
+
+test('with two players, the one who stays wins at once when the other quits', () => {
+  const { room, net, events } = makeRoom(['Ada', 'Tunde']);
+  try {
+    startNow(room, net);
+    answerCorrectly(room, net, 'p2');
+    engine.playerLeft(room, net, 'p1');
+
+    const results = events.find((e) => e.e === 'game:results').payload;
+    assert.equal(results.forfeit, true);
+    assert.equal(results.players[0].id, 'p2');
+    assert.equal(results.players[0].rank, 1);
+    assert.equal(results.players[0].forfeitWin, true);
+    assert.equal(results.players[1].id, 'p1');
+    assert.equal(results.players[1].left, true);
+    assert.equal(room.status, 'finished');
+  } finally {
+    engine.stop(room);
+  }
+});
+
+test('with three players, the game carries on and the quitter ranks last', () => {
+  const { room, net, events } = makeRoom(['Ada', 'Tunde', 'Chi']);
+  try {
+    startNow(room, net);
+    engine.playerLeft(room, net, 'p3');
+    assert.equal(room.status, 'playing');
+    assert.equal(events.some((e) => e.e === 'game:results'), false);
+
+    solveAll(room, net, 'p1');
+    solveAll(room, net, 'p2');
+    const results = events.find((e) => e.e === 'game:results').payload;
+    assert.equal(results.forfeit, false);
+    assert.equal(results.players[2].id, 'p3');
+    assert.equal(results.players[2].rank, 3);
+  } finally {
+    engine.stop(room);
+  }
+});
+
+test('no forfeit win if someone had already finished', () => {
+  const { room, net, events } = makeRoom(['Ada', 'Tunde']);
+  try {
+    startNow(room, net);
+    solveAll(room, net, 'p1');
+    engine.playerLeft(room, net, 'p2');
+
+    const results = events.find((e) => e.e === 'game:results').payload;
+    assert.equal(results.forfeit, false);
+    assert.equal(results.players[0].id, 'p1');
+    assert.equal(typeof results.players[0].totalMs, 'number');
+  } finally {
+    engine.stop(room);
+  }
+});

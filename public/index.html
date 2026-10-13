@@ -169,6 +169,7 @@
     <section id="game" class="screen" hidden>
       <div class="game-head">
         <div class="topbar">
+          <button id="quitBtn" class="icon-btn quit-btn" aria-label="Quit game">&times;</button>
           <div class="progress"><div id="progressFill" class="progress-fill"></div></div>
           <div class="timer-wrap">
             <span id="timer">0:00.0</span>
@@ -255,6 +256,18 @@
     </section>
 
   </main>
+
+    <!-- Quit confirmation -->
+  <div id="quitModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="quitTitle" hidden>
+    <div class="modal-card">
+      <h2 id="quitTitle">Quit this game?</h2>
+      <p id="quitText" class="quit-text"></p>
+      <button id="quitKeep" class="btn btn-green">Keep playing</button>
+      <button id="quitConfirm" class="btn btn-ghost quit-confirm">Quit</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" hidden></div>
 
   <!-- How to play card -->
   <div id="help" class="modal" role="dialog" aria-modal="true" aria-labelledby="helpTitle" hidden>

@@ -70,6 +70,12 @@ const hintLine = $('hintLine');
 const skipBtn = $('skipBtn');
 const skipPen = $('skipPen');
 const finishedMsg = $('finishedMsg');
+const quitBtn = $('quitBtn');
+const quitModal = $('quitModal');
+const quitText = $('quitText');
+const quitKeep = $('quitKeep');
+const quitConfirm = $('quitConfirm');
+const toast = $('toast');
 
 // results
 const resultTitle = $('resultTitle');
@@ -148,6 +154,9 @@ let ghostReady = false;     // has the practice "PB" dot been set up for this ga
 let ghostBestMs = 0;        // the best time the ghost dot follows (0 = no ghost)
 let ghostDot = null;        // the practice "PB" dot on the race track
 let gameMode = 'race';      // 'race' or 'timeattack'
+let lastScore = 0;          // Time Attack: your score so far (saved if you quit)
+let lastTotalQ = 0;         // how many questions the race has
+let toastTimer = null;
 let endAtLocal = 0;         // Time Attack: when the 60 seconds end, on THIS device's clock
 let taTotalMs = 60000;      // Time Attack: how long the whole run lasts
 let setupMode = 'new';      // 'new' (first visit) or 'edit' (changing the profile)
@@ -501,10 +510,13 @@ function renderProfile() {
     const li = document.createElement('li');
     li.className = 'player history-row';
 
+    const modeName = g.mode === 'timeattack' ? 'Time Attack' : g.mode === 'practice' ? 'Practice' : g.mode === 'versus' ? 'Race' : 'Solo';
     let label;
-    if (g.mode === 'versus') label = g.finished ? `${ordinal(g.rank)} of ${g.players}` : 'Did not finish';
+    if (g.quit) label = `Quit · ${modeName}`;
+    else if (g.forfeit) label = 'Won (opponent left)';
+    else if (g.mode === 'versus') label = g.finished ? `${ordinal(g.rank)} of ${g.players}` : 'Did not finish';
     else if (g.mode === 'timeattack') label = 'Time Attack';
-    else label = (g.mode === 'practice' ? 'Practice' : 'Solo') + (g.finished ? '' : ' · unfinished');
+    else label = modeName + (g.finished ? '' : ' · unfinished');
 
     const name = document.createElement('span');
     name.className = 'name';
@@ -513,9 +525,11 @@ function renderProfile() {
     const date = new Date(g.t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
     const meta = document.createElement('span');
     meta.className = 'meta';
-    meta.textContent = g.mode === 'timeattack'
-      ? `${capitalize(g.difficulty)} · ${g.score} correct · ${date}`
-      : `${capitalize(g.difficulty)} · ${g.count} questions · ${g.finished && g.totalMs ? formatTime(g.totalMs) : '–'} · ${date}`;
+    let detail;
+    if (g.mode === 'timeattack') detail = `${g.score || 0} correct`;
+    else if (!g.finished) detail = `${g.progress || 0}/${g.count} answered`;
+    else detail = `${g.count} questions · ${g.totalMs ? formatTime(g.totalMs) : '–'}`;
+    meta.textContent = `${capitalize(g.difficulty)} · ${detail} · ${date}`;
 
     li.append(name, meta);
     recentList.append(li);
@@ -768,6 +782,12 @@ rematchBtn.addEventListener('click', () => socket.emit('game:rematch'));
 socket.on('room:update', (room) => {
   if (!currentRoom || room.code !== currentRoom.code) return;
   renderRoom(room);
+    // If the host just left while we are looking at the results, update who can press Rematch.
+  if (!$('results').hidden) {
+    const nowHost = room.hostId === myId;
+    rematchBtn.hidden = !nowHost;
+    rematchHint.hidden = nowHost;
+  }
   // After a rematch the room goes back to "lobby": bring everyone back too.
   if (room.status === 'lobby' && $('lobby').hidden) showScreen('lobby');
 });
@@ -930,6 +950,9 @@ function showQuestion(q, message) {
   showScreen('game');
 
   gameMode = q.mode || 'race';
+  lastScore = q.score || 0;
+  lastTotalQ = q.total || 0;
+  quitBtn.hidden = false;
   const ta = gameMode === 'timeattack';
   raceTrack.hidden = ta; // a solo Time Attack run has nobody to race on the track
   if (!ghostReady) setupGhost();
@@ -976,6 +999,7 @@ function showQuestion(q, message) {
 }
 
 function showFinished() {
+  quitBtn.hidden = true; // nothing to quit once you have finished
   finished = true;
   stopTicker();
   clearInterval(lockTimer);
@@ -1079,6 +1103,67 @@ answerInput.addEventListener('input', () => {
   submitAnswer();
 });
 
+// ----- A little message at the top: "Tunde left the game" -----
+function showToast(text) {
+  toast.textContent = text;
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, 3000);
+}
+socket.on('room:notice', ({ text }) => {
+  if (typeof text === 'string') showToast(text);
+});
+
+// ----- Quit button -----
+function openQuit() {
+  const solo = !!(currentRoom && currentRoom.practice);
+  quitText.textContent = solo
+    ? "This run won't count towards your best score. It will be saved in your history as Quit."
+    : 'Your friends will be told you left, and the game carries on without you. The clock keeps running while you decide.';
+  quitModal.hidden = false;
+  quitKeep.focus();
+}
+
+function closeQuit() {
+  quitModal.hidden = true;
+  if (!answerInput.hidden) answerInput.focus();
+}
+
+// Saves the unfinished game in your history, then leaves.
+function confirmQuit() {
+  quitModal.hidden = true;
+  const room = currentRoom;
+  if (room && myId) {
+    const practice = !!room.practice;
+    const ta = gameMode === 'timeattack';
+    const versus = !practice && room.players.length >= 2;
+    recordGame({
+      id: `quit-${room.code}-${Date.now()}-${myId}`,
+      t: Date.now(),
+      mode: ta ? 'timeattack' : practice ? 'practice' : versus ? 'versus' : 'solo',
+      difficulty: room.settings.difficulty,
+      count: ta ? 0 : lastTotalQ,
+      players: room.players.length,
+      rank: null,
+      finished: false,
+      quit: true,
+      totalMs: null,
+      score: ta ? lastScore : null,
+      progress: currentIndex,
+      wrongs: 0,
+      skips: 0,
+      won: false,
+    });
+  }
+  leaveRoom();
+}
+
+quitBtn.addEventListener('click', openQuit);
+quitKeep.addEventListener('click', closeQuit);
+quitConfirm.addEventListener('click', confirmQuit);
+quitModal.addEventListener('click', (e) => { if (e.target === quitModal) closeQuit(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !quitModal.hidden) closeQuit(); });
+
 // ----- Race track: everyone's progress, live -----
 function renderLanes(players, total) {
   const same = players.length === laneEls.size && players.every((p) => laneEls.has(p.id));
@@ -1132,7 +1217,7 @@ function renderPodium(players) {
 
     const time = document.createElement('div');
     time.className = 'pod-time';
-    time.textContent = p.finished ? formatTime(p.totalMs) : 'DNF';
+    time.textContent = p.finished ? formatTime(p.totalMs) : p.left ? 'left' : p.forfeitWin ? 'winner' : 'DNF';
 
     col.append(makeAvatar(p, true), block, name, time);
     podium.append(col);
@@ -1186,6 +1271,7 @@ function confetti() {
 
 socket.on('game:results', ({ players, total, gameId, mode, durationMs }) => {
   clearInterval(countdownTimer);
+  quitModal.hidden = true;
   clearInterval(lockTimer);
   stopTicker();
 
@@ -1211,7 +1297,9 @@ socket.on('game:results', ({ players, total, gameId, mode, durationMs }) => {
       score: ta ? me.score : null,
       wrongs: me.wrongs,
       skips: me.skips,
-      won: versus && me.finished && me.rank === 1,
+      won: versus && me.rank === 1 && (me.finished || !!me.forfeitWin),
+      forfeit: !!me.forfeitWin,
+      progress: me.completed,
     });
   }
 
@@ -1264,15 +1352,19 @@ socket.on('game:results', ({ players, total, gameId, mode, durationMs }) => {
       resultTitle.textContent = newBest ? 'New best!' : 'Time!';
       resultSub.textContent = `${me.score} correct in ${Math.round((durationMs || 60000) / 1000)} seconds`;
     } else {
-      if (!me.finished) resultTitle.textContent = 'Time is up';
+      if (me.forfeitWin) resultTitle.textContent = 'You win!';
+      if (me.forfeitWin) resultTitle.textContent = 'You win!';
+      else if (!me.finished) resultTitle.textContent = 'Time is up';
       else if (practice) resultTitle.textContent = newBest ? 'New best!' : 'Done!';
       else if (players.length === 1) resultTitle.textContent = 'Finished!';
       else if (me.rank === 1) resultTitle.textContent = 'You won!';
       else resultTitle.textContent = `${ordinal(me.rank)} place`;
 
-      resultSub.textContent = me.finished
-        ? `${total} of ${total} · ${formatTime(me.totalMs)}`
-        : `${me.completed} of ${total} answered`;
+      resultSub.textContent = me.forfeitWin
+        ? 'The other players left the game'
+        : me.finished
+          ? `${total} of ${total} · ${formatTime(me.totalMs)}`
+          : `${me.completed} of ${total} answered`;
     }
   }
 
@@ -1298,7 +1390,9 @@ socket.on('game:results', ({ players, total, gameId, mode, durationMs }) => {
       meta.className = 'meta';
       meta.textContent = p.finished
         ? `${formatTime(p.totalMs)} · ${p.wrongs} wrong · ${p.skips} skipped`
-        : `${p.left ? 'left' : 'did not finish'} (${p.completed}/${total})`;
+        : p.forfeitWin
+          ? `opponent left · ${p.completed}/${total}`
+          : `${p.left ? 'left' : 'did not finish'} (${p.completed}/${total})`;
 
       li.append(rank, makeAvatar(p), name, meta);
       resultList.append(li);
@@ -1315,8 +1409,10 @@ socket.on('game:results', ({ players, total, gameId, mode, durationMs }) => {
   showScreen('results');
 
   // 5) Celebrate (only the first time we see these results, not after a refresh).
+  const forfeitWin = !!(me && me.forfeitWin);
   const celebrate = fresh && me && (
     (ta && newBest) ||
+    forfeitWin ||
     (!ta && me.finished && ((practice && newBest) || (versus && me.rank === 1)))
   );
   setTimeout(() => {

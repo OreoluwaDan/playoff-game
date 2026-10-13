@@ -499,3 +499,15 @@ button { font-family: inherit; cursor: pointer; }
 .tagline.left { margin: 0 0 14px; text-align: left; }
 .progress-fill.low { background: var(--orange); }
 .pen.free { background: #e6f7d4; color: var(--green-d); }
+
+/* ---------- Stage 10C: quit button, confirmation and message ---------- */
+.quit-btn { flex: none; margin-left: -8px; font-size: 1.8rem; line-height: 1; }
+.quit-text { margin: 0 0 16px; font-weight: 700; color: #777; }
+.quit-confirm { color: var(--red); }
+.toast {
+  position: fixed; top: max(12px, env(safe-area-inset-top)); left: 50%; z-index: 80;
+  transform: translateX(-50%); max-width: calc(100% - 32px);
+  padding: 10px 16px; border-radius: 14px;
+  background: #4b4b4b; color: #fff;
+  font-size: 0.9rem; font-weight: 800; text-align: center;
+}

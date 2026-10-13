@@ -35,9 +35,18 @@ function getMe(socket) {
 }
 
 // Remove a player for good and tell everyone who is still inside.
-function removeFromRoom(code, playerId) {
+function removeFromRoom(code, playerId, reason) {
   const room = rooms.getRoom(code);
   if (!room) return;
+
+  // Tell the others, but only while a game is under way.
+  const leaver = room.players.find((p) => p.id === playerId);
+  if (leaver && room.players.length > 1 && (room.status === 'countdown' || room.status === 'playing')) {
+    io.to(code).emit('room:notice', {
+      text: leaver.name + (reason === 'disconnected' ? ' disconnected' : ' left the game'),
+    });
+  }
+
   engine.playerLeft(room, net, playerId);
 
   const result = rooms.removePlayer(code, playerId);
@@ -175,13 +184,13 @@ io.on('connection', (socket) => {
     if (!info) return;
     socket.leave(info.code);
     socket.leave(privateRoom(info.playerId));
-    removeFromRoom(info.code, info.playerId);
+    removeFromRoom(info.code, info.playerId, 'left');
   });
 
   // The connection dropped. Keep their seat for a while in case they come back.
   socket.on('disconnect', () => {
     console.log('A player left:', socket.id);
-    const result = rooms.markDisconnected(socket.id, RECONNECT_GRACE_MS, removeFromRoom);
+    const result = rooms.markDisconnected(socket.id, RECONNECT_GRACE_MS, (code, playerId) => removeFromRoom(code, playerId, 'disconnected'));
     if (!result) return;
     io.to(result.room.code).emit('room:update', rooms.publicState(result.room));
     engine.setAway(result.room, net, result.player.id, true);

@@ -294,7 +294,7 @@ function endIfEveryoneDone(room, net) {
   if (done) endGame(room, net);
 }
 
-function endGame(room, net) {
+function endGame(room, net, reason) {
   const game = room.game;
   if (!game || game.over) return;
   game.over = true;
@@ -335,6 +335,7 @@ function endGame(room, net) {
   }
 
   // ----- Classic Race: the lowest total time wins -----
+  const forfeit = reason === 'forfeit'; // everyone else quit, so the last player wins
   const results = [...game.players.values()].map((p) => {
     const finished = p.finishedAt !== null;
     return {
@@ -343,6 +344,7 @@ function endGame(room, net) {
       color: p.color,
       finished,
       left: p.left,
+      forfeitWin: forfeit && !p.left && !finished,
       completed: p.times.length, // questions answered or skipped
       totalMs: finished ? totalMs(game, p) : null,
       wrongs: p.wrongs,
@@ -352,17 +354,26 @@ function endGame(room, net) {
     };
   });
 
-  // Finished players first (fastest time wins, fewer wrongs breaks a tie).
-  // Anyone who did not finish is ranked by how far they got.
+  // Group 0: finished (fastest first). Group 1: still in, but not finished.
+  // Group 2: quit before finishing, so they always rank last.
+  const group = (r) => (r.finished ? 0 : r.left ? 2 : 1);
   results.sort((a, b) => {
-    if (a.finished !== b.finished) return a.finished ? -1 : 1;
-    if (a.finished) return (a.totalMs - b.totalMs) || (a.wrongs - b.wrongs);
+    const ga = group(a);
+    const gb = group(b);
+    if (ga !== gb) return ga - gb;
+    if (ga === 0) return (a.totalMs - b.totalMs) || (a.wrongs - b.wrongs);
     return (b.completed - a.completed) || (a.wrongs - b.wrongs);
   });
   results.forEach((r, i) => { r.rank = i + 1; });
 
   // Saved so a player who reconnects after the end can still see the results.
-  game.resultsPayload = { mode: 'race', players: results, total: game.questions.length, gameId: game.startAt };
+  game.resultsPayload = {
+    mode: 'race',
+    players: results,
+    total: game.questions.length,
+    gameId: game.startAt,
+    forfeit,
+  };
   net.toRoom(room.code, 'game:results', game.resultsPayload);
 }
 
@@ -395,15 +406,27 @@ function resync(room, net, playerId) {
   }
 }
 
-// A player left for good (or their time to reconnect ran out).
+// A player left for good (they quit, or their time to reconnect ran out).
 function playerLeft(room, net, playerId) {
   const game = room.game;
   if (!game || game.over) return;
   const p = game.players.get(playerId);
-  if (!p) return;
+  if (!p || p.left) return;
   p.left = true;
   clearTimeout(p.timer);
   sendProgress(room, net);
+
+  // Classic Race with friends: if only one player is left, and nobody has finished,
+  // that player wins straight away.
+  if (!isTimeAttack(game) && game.players.size >= 2) {
+    const all = [...game.players.values()];
+    const stillIn = all.filter((q) => !q.left);
+    const anyFinished = all.some((q) => q.finishedAt !== null);
+    if (stillIn.length === 1 && !anyFinished) {
+      endGame(room, net, 'forfeit');
+      return;
+    }
+  }
   endIfEveryoneDone(room, net);
 }
 
